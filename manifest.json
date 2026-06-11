@@ -1,7 +1,7 @@
 {
   "name": "Kangen si Mbok",
   "short_name": "KSB POS",
-  "description": "Enterprise Point of Sale System for Buffet Management",
+  "description": "Enterprise Point of Sale System for Kangen si Mbok",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
@@ -10,13 +10,13 @@
   "theme_color": "#2c3e50",
   "icons": [
     {
-      "src": "https://github.com/patrickkanadi/KangensiMbok/blob/main/LOGO%20SI%20MBOK.png",
+      "src": "https://raw.githubusercontent.com/patrickkanadi/KangensiMbok/main/LOGO%20SI%20MBOK.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/1011/1011407.png",
+      "src": "https://raw.githubusercontent.com/patrickkanadi/KangensiMbok/main/LOGO%20SI%20MBOK.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
