@@ -22,6 +22,24 @@ let currentSubCategory = "All";
 window.currentReviewTotals = { baseSubtotal: 0, effectiveSubtotal: 0, totalSavings: 0, promoDiscount: 0, promoName: "", taxAmount: 0, grandTotal: 0 };
 window.currentShiftData = {}; 
 
+// PWA Install Prompt Logic
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const installBtn = document.getElementById('install-btn');
+    if (installBtn) installBtn.classList.remove('hidden');
+});
+
+document.getElementById('install-btn')?.addEventListener('click', async () => {
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') { document.getElementById('install-btn').classList.add('hidden'); }
+        deferredPrompt = null;
+    }
+});
+
 function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -132,8 +150,12 @@ function processVoidApprovals(authStatuses) {
     ordStore.getAll().onsuccess = (e) => {
         e.target.result.forEach(order => {
             const remote = authStatuses.orders[order.orderId];
-            if (remote && remote.status === "Voided" && order.orderStatus !== "Voided") {
-                order.orderStatus = "Voided"; ordStore.put(order); uiNeedsRefresh = true;
+            if (remote) {
+                if (remote.status === "Voided" && order.orderStatus !== "Voided") {
+                    order.orderStatus = "Voided"; ordStore.put(order); uiNeedsRefresh = true;
+                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") {
+                    order.orderStatus = remote.status; ordStore.put(order); uiNeedsRefresh = true;
+                }
             }
         });
         if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) renderHistoryList('orders');
@@ -142,8 +164,12 @@ function processVoidApprovals(authStatuses) {
     expStore.getAll().onsuccess = (e) => {
         e.target.result.forEach(exp => {
             const remote = authStatuses.expenses[exp.expenseId];
-            if (remote && remote.status === "Voided" && exp.status !== "Voided") {
-                exp.status = "Voided"; expStore.put(exp); uiNeedsRefresh = true;
+            if (remote) {
+                if (remote.status === "Voided" && exp.status !== "Voided") {
+                    exp.status = "Voided"; expStore.put(exp); uiNeedsRefresh = true;
+                } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && exp.status === "Void Pending") {
+                    exp.status = remote.status; expStore.put(exp); uiNeedsRefresh = true;
+                }
             }
         });
         if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) renderHistoryList('expenses');
@@ -508,7 +534,9 @@ async function getDynamicSettings() {
 async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeDue) {
     const settings = await getDynamicSettings();
     const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
-    const footer1 = settings["Footer_1"] || "THANK YOU!"; const footer2 = settings["Footer_2"] || "Please come again";
+    const footer1 = settings["Footer_1"] || "THANK YOU!"; 
+    const footer2 = settings["Footer_2"] || "Please come again";
+    const footer3 = settings["Footer_3"] || ""; 
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     
     let itemsHtml = "";
@@ -542,13 +570,12 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
             ${qris > 0 ? `<div style="display:flex; justify-content:space-between;"><span>QRIS Paid:</span><span>Rp ${qris.toLocaleString('id-ID')}</span></div>` : ''}
             ${changeDue > 0 ? `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top: 5px;"><span>CHANGE:</span><span>Rp ${changeDue.toLocaleString('id-ID')}</span></div>` : ''}
         </div>
-        <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${footer1}</div><div style="text-align:center; margin-top:2px; font-size: 10px;">${footer2}</div>
+        <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${footer1}</div>
+        <div style="text-align:center; margin-top:2px; font-size: 10px;">${footer2}</div>
+        ${footer3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${footer3}</div>` : ''}
     `;
 }
 
-// ---------------------------------------------------------
-// HISTORY & VOID ENGINE
-// ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
 
@@ -594,7 +621,6 @@ function renderHistoryList(type) {
     }
 }
 
-// THE NEW ADMIN OVERRIDE ENGINE
 function requestVoid(type, id) {
     currentVoidTarget = { type, id };
     document.getElementById("admin-void-pin").value = "";
@@ -615,26 +641,33 @@ function submitRemoteVoid() {
     closeAdminVoidModal(); runBackgroundSync();
 }
 
-function confirmAdminVoid() {
+async function confirmAdminVoid() {
     const pin = document.getElementById("admin-void-pin").value;
     if (!pin) return alert("Please enter a PIN.");
+
+    const settings = await getDynamicSettings();
+    const masterPin = String(settings["Master_PIN"]);
+    const isMaster = (pin === masterPin);
     
     db.transaction(["staff"], "readonly").objectStore("staff").get(pin).onsuccess = (e) => {
         const staff = e.target.result;
-        if (staff && staff.role.toLowerCase() === 'admin') {
+        const isAdmin = (staff && staff.role.toLowerCase() === 'admin');
+
+        if (isMaster || isAdmin) {
+            const authName = isMaster ? "Master Admin" : staff.name;
             const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
             
             db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
                 const item = ev.target.result;
-                if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = staff.name; } 
-                else { item.status = "Voided"; item.voidAuth = staff.name; }
+                if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; } 
+                else { item.status = "Voided"; item.voidAuth = authName; }
                 item.syncStatus = "Pending"; 
                 db.transaction([storeName], "readwrite").objectStore(storeName).put(item);
                 renderHistoryList(type);
             };
             
-            db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Voided", authName: staff.name });
-            closeAdminVoidModal(); runBackgroundSync(); alert("Transaction instantly voided by: " + staff.name);
+            db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Voided", authName: authName });
+            closeAdminVoidModal(); runBackgroundSync(); alert("Transaction instantly voided by: " + authName);
         } else { alert("Invalid PIN or you do not have Admin privileges."); }
     };
 }
