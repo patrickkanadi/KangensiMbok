@@ -1,0 +1,16 @@
+{
+  "name": "Buffet POS System",
+  "short_name": "Buffet POS",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#2c3e50",
+  "theme_color": "#2c3e50",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1011/1011407.png", 
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
