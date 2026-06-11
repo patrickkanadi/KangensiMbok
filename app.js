@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 16; 
+const DB_VERSION = 17; // Upgraded for Money Journal!
 let db;
 
 let tablePrefix = "A"; 
@@ -15,29 +15,20 @@ let currentLoginTime = "";
 let nextTableNumber = 1; 
 let currentVoidTarget = { type: null, id: null };
 
-let globalMenuData = [];
-let currentCategory = "";
-let currentSubCategory = "All";
-
+window.masterDrawerBalance = 0; // Absolute drawer starting point from server
 window.currentReviewTotals = { baseSubtotal: 0, effectiveSubtotal: 0, totalSavings: 0, promoDiscount: 0, promoName: "", taxAmount: 0, grandTotal: 0 };
 window.currentShiftData = {}; 
+let isLoggingOut = false; // Flag to intercept end shift
 
 // PWA Install Prompt Logic
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
+    e.preventDefault(); deferredPrompt = e;
     const installBtn = document.getElementById('install-btn');
     if (installBtn) installBtn.classList.remove('hidden');
 });
-
 document.getElementById('install-btn')?.addEventListener('click', async () => {
-    if (deferredPrompt) {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') { document.getElementById('install-btn').classList.add('hidden'); }
-        deferredPrompt = null;
-    }
+    if (deferredPrompt) { deferredPrompt.prompt(); const { outcome } = await deferredPrompt.userChoice; if (outcome === 'accepted') { document.getElementById('install-btn').classList.add('hidden'); } deferredPrompt = null; }
 });
 
 function initDB() {
@@ -58,6 +49,8 @@ function initDB() {
             if (!db.objectStoreNames.contains("shift_reports")) db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("past_shifts")) db.createObjectStore("past_shifts", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("active_shifts")) db.createObjectStore("active_shifts", { keyPath: "pin" }); 
+            // NEW TABLE FOR MONEY JOURNAL
+            if (!db.objectStoreNames.contains("cash_drops")) db.createObjectStore("cash_drops", { keyPath: "dropId" }); 
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
         request.onerror = (event) => { reject(event.target.errorCode); };
@@ -83,8 +76,7 @@ function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value;
     if (!pinInput) return alert("Please enter a PIN");
 
-    const store = db.transaction(["staff"], "readonly").objectStore("staff");
-    store.get(pinInput).onsuccess = (e) => {
+    db.transaction(["staff"], "readonly").objectStore("staff").get(pinInput).onsuccess = (e) => {
         const staffMember = e.target.result;
         if (staffMember) {
             db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
@@ -123,9 +115,10 @@ async function syncMasterData() {
     if (!navigator.onLine) { statusText.innerText = "Offline Mode"; document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return; }
     statusText.innerText = "Syncing...";
     try {
-        const response = await fetch(API_URL);
-        const result = await response.json();
+        const response = await fetch(API_URL); const result = await response.json();
         if (result.status === "Success") {
+            window.masterDrawerBalance = result.masterDrawerBalance || 0; // Captures absolute physical cash history
+            
             const transaction = db.transaction(["staff", "menu", "settings", "members", "expense_categories", "promo_codes", "past_shifts"], "readwrite");
             
             const staffStore = transaction.objectStore("staff"); staffStore.clear(); result.data.staff.forEach(person => staffStore.add(person));
@@ -142,6 +135,9 @@ async function syncMasterData() {
     } catch (error) { statusText.innerText = "Sync Failed"; document.getElementById("network-dot").style.backgroundColor = "#f39c12"; }
 }
 
+// ---------------------------------------------------------
+// THE NEW DECENTRALIZED VOID AFTERMATH ENGINE
+// ---------------------------------------------------------
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite");
     const ordStore = tx.objectStore("orders"); const expStore = tx.objectStore("expenses");
@@ -153,6 +149,7 @@ function processVoidApprovals(authStatuses) {
             if (remote) {
                 if (remote.status === "Voided" && order.orderStatus !== "Voided") {
                     order.orderStatus = "Voided"; ordStore.put(order); uiNeedsRefresh = true;
+                    applyVoidAftermath(order); // Tablet runs aftermath automatically if Server says OK!
                 } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") {
                     order.orderStatus = remote.status; ordStore.put(order); uiNeedsRefresh = true;
                 }
@@ -175,6 +172,39 @@ function processVoidApprovals(authStatuses) {
         if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) renderHistoryList('expenses');
     };
 }
+
+function applyVoidAftermath(order) {
+    let itemsToReturn = [];
+    order.plates.forEach(p => p.items.forEach(i => itemsToReturn.push({ name: i.name, qty: i.qty })));
+    
+    // Step 1: Update Local DB so tablet reflects reality instantly
+    const tx = db.transaction(["menu", "members"], "readwrite");
+    const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
+
+    itemsToReturn.forEach(item => {
+        menuStore.openCursor().onsuccess = (e) => {
+            const cursor = e.target.result;
+            if (cursor) {
+                if (cursor.value.name === item.name && cursor.value.trackStock) { const updated = cursor.value; updated.currentStock += item.qty; cursor.update(updated); }
+                cursor.continue();
+            }
+        };
+    });
+
+    if (order.customerPhone && order.customerPhone !== "Walk-in" && order.customerPhone !== "-") {
+        memberStore.get(order.customerPhone).onsuccess = (e) => {
+            const mem = e.target.result;
+            if (mem) { mem.spent = Math.max(0, (mem.spent || 0) - order.grandTotal); memberStore.put(mem); }
+        };
+    }
+
+    // Step 2: Instruct server to fix its own math in the background
+    if (navigator.onLine) {
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn } }) });
+    }
+}
+// ---------------------------------------------------------
+
 
 function loadMenuUI() {
     const store = db.transaction(["menu"], "readonly").objectStore("menu");
@@ -428,9 +458,7 @@ function reviewOrder() {
 
     const list = document.getElementById("promo-list"); list.innerHTML = "";
     db.transaction(["promo_codes"], "readonly").objectStore("promo_codes").getAll().onsuccess = (e) => {
-        e.target.result.forEach(promo => { 
-            const opt = document.createElement("option"); opt.value = promo.code; opt.innerText = `${promo.discountPercent}% Off`; list.appendChild(opt); 
-        });
+        e.target.result.forEach(promo => { const opt = document.createElement("option"); opt.value = promo.code; opt.innerText = `${promo.discountPercent}% Off`; list.appendChild(opt); });
     };
 
     document.getElementById("promo-code").value = "";
@@ -508,14 +536,10 @@ async function finalizePayment(shouldPrint) {
     else if (changeDue > 0) { alert(`Payment Success!\nChange due: Rp ${changeDue.toLocaleString('id-ID')}`); }
 
     const orderPayload = {
-        orderId: orderId, timestamp: new Date().toISOString(), cashier: currentCashier, 
-        shiftId: currentShiftId, tablePrefix: currentOrder.name,
-        customerName: currentOrder.customerName, customerPhone: currentOrder.customerPhone,
-        orderStatus: finalStatus, syncStatus: "Pending", voidAuth: "N/A", 
-        plates: currentOrder.plates, 
-        subtotal: totals.baseSubtotal, discounts: totals.totalSavings, promoName: totals.promoName, grandTotal: totals.grandTotal,
-        paymentMethod: (cashPaid > 0 && qrisPaid > 0) ? "Split" : (qrisPaid > 0 ? "QRIS" : "Cash"),
-        cashAmount: cashPaid, qrisAmount: qrisPaid
+        orderId: orderId, timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, tablePrefix: currentOrder.name,
+        customerName: currentOrder.customerName, customerPhone: currentOrder.customerPhone, orderStatus: finalStatus, syncStatus: "Pending", voidAuth: "N/A", 
+        plates: currentOrder.plates, subtotal: totals.baseSubtotal, discounts: totals.totalSavings, promoName: totals.promoName, grandTotal: totals.grandTotal,
+        paymentMethod: (cashPaid > 0 && qrisPaid > 0) ? "Split" : (qrisPaid > 0 ? "QRIS" : "Cash"), cashAmount: cashPaid, qrisAmount: qrisPaid
     };
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
@@ -534,9 +558,7 @@ async function getDynamicSettings() {
 async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeDue) {
     const settings = await getDynamicSettings();
     const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
-    const footer1 = settings["Footer_1"] || "THANK YOU!"; 
-    const footer2 = settings["Footer_2"] || "Please come again";
-    const footer3 = settings["Footer_3"] || ""; 
+    const footer1 = settings["Footer_1"] || "THANK YOU!"; const footer2 = settings["Footer_2"] || "Please come again"; const footer3 = settings["Footer_3"] || ""; 
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     
     let itemsHtml = "";
@@ -575,6 +597,71 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
         ${footer3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${footer3}</div>` : ''}
     `;
 }
+
+// ---------------------------------------------------------
+// CONTINUOUS DRAWER ENGINE (MONEY JOURNAL)
+// ---------------------------------------------------------
+function calculateLiveDrawer(callback) {
+    let liveDrawer = window.masterDrawerBalance || 0; // The true physical sum from the server
+    
+    // We must add any UNSYNCED data from the local tablet to get the exact real-time amount
+    let tx = db.transaction(["orders", "expenses", "cash_drops"], "readonly");
+    let ordersReq = tx.objectStore("orders").getAll();
+    let expReq = tx.objectStore("expenses").getAll();
+    let dropReq = tx.objectStore("cash_drops").getAll();
+    
+    tx.oncomplete = () => {
+        ordersReq.result.forEach(o => { if (o.syncStatus === "Pending" && o.orderStatus.startsWith("Paid")) liveDrawer += (o.cashAmount || 0); });
+        expReq.result.forEach(e => { if (e.syncStatus === "Pending" && e.status === "Active") liveDrawer -= (e.amount || 0); });
+        dropReq.result.forEach(d => { if (d.syncStatus === "Pending") liveDrawer -= (d.toAdmin + d.toBank); });
+        callback(liveDrawer);
+    };
+}
+
+function openCashDrop(forLogout = false) {
+    isLoggingOut = forLogout;
+    if (isLoggingOut) {
+        document.getElementById("cash-drop-title").innerText = "🔒 End of Shift Cash Log";
+        document.getElementById("btn-drop-cancel").innerText = "Cancel Logout";
+        document.getElementById("btn-drop-confirm").innerText = "Confirm & Logout";
+    } else {
+        document.getElementById("cash-drop-title").innerText = "🏦 Store Money";
+        document.getElementById("btn-drop-cancel").innerText = "Cancel";
+        document.getElementById("btn-drop-confirm").innerText = "Save Record";
+    }
+    
+    document.getElementById("drop-admin").value = 0; document.getElementById("drop-bank").value = 0; document.getElementById("drop-notes").value = "";
+    
+    calculateLiveDrawer((liveAmount) => {
+        document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`;
+        document.getElementById("cash-drop-modal").classList.remove("hidden");
+    });
+}
+
+function closeCashDrop() { document.getElementById("cash-drop-modal").classList.add("hidden"); isLoggingOut = false; }
+
+function submitCashDrop() {
+    const adminAmt = Number(document.getElementById("drop-admin").value) || 0;
+    const bankAmt = Number(document.getElementById("drop-bank").value) || 0;
+    const notes = document.getElementById("drop-notes").value || (isLoggingOut ? "Shift End" : "Mid-shift Drop");
+    
+    calculateLiveDrawer((liveAmount) => {
+        const leftInDrawer = liveAmount - adminAmt - bankAmt;
+        
+        const payload = {
+            dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
+            toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: notes, syncStatus: "Pending"
+        };
+        
+        db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
+        closeCashDrop(); runBackgroundSync();
+        
+        if (isLoggingOut) { executeFinalLogout(); } 
+        else { alert(`Cash Drop Logged!\nLeft in Drawer: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
+    });
+}
+// ---------------------------------------------------------
+
 
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
@@ -621,12 +708,7 @@ function renderHistoryList(type) {
     }
 }
 
-function requestVoid(type, id) {
-    currentVoidTarget = { type, id };
-    document.getElementById("admin-void-pin").value = "";
-    document.getElementById("admin-void-modal").classList.remove("hidden");
-}
-
+function requestVoid(type, id) { currentVoidTarget = { type, id }; document.getElementById("admin-void-pin").value = ""; document.getElementById("admin-void-modal").classList.remove("hidden"); }
 function closeAdminVoidModal() { document.getElementById("admin-void-modal").classList.add("hidden"); }
 
 function submitRemoteVoid() {
@@ -634,24 +716,18 @@ function submitRemoteVoid() {
     db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (e) => {
         const item = e.target.result;
         if (type === 'orders') item.orderStatus = "Void Pending"; else item.status = "Void Pending";
-        db.transaction([storeName], "readwrite").objectStore(storeName).put(item);
-        renderHistoryList(type); 
+        db.transaction([storeName], "readwrite").objectStore(storeName).put(item); renderHistoryList(type); 
     };
     db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Waiting" });
     closeAdminVoidModal(); runBackgroundSync();
 }
 
 async function confirmAdminVoid() {
-    const pin = document.getElementById("admin-void-pin").value;
-    if (!pin) return alert("Please enter a PIN.");
-
-    const settings = await getDynamicSettings();
-    const masterPin = String(settings["Master_PIN"]);
-    const isMaster = (pin === masterPin);
+    const pin = document.getElementById("admin-void-pin").value; if (!pin) return alert("Please enter a PIN.");
+    const settings = await getDynamicSettings(); const masterPin = String(settings["Master_PIN"]); const isMaster = (pin === masterPin);
     
     db.transaction(["staff"], "readonly").objectStore("staff").get(pin).onsuccess = (e) => {
-        const staff = e.target.result;
-        const isAdmin = (staff && staff.role.toLowerCase() === 'admin');
+        const staff = e.target.result; const isAdmin = (staff && staff.role.toLowerCase() === 'admin');
 
         if (isMaster || isAdmin) {
             const authName = isMaster ? "Master Admin" : staff.name;
@@ -659,11 +735,9 @@ async function confirmAdminVoid() {
             
             db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
                 const item = ev.target.result;
-                if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; } 
+                if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; applyVoidAftermath(item); } 
                 else { item.status = "Voided"; item.voidAuth = authName; }
-                item.syncStatus = "Pending"; 
-                db.transaction([storeName], "readwrite").objectStore(storeName).put(item);
-                renderHistoryList(type);
+                item.syncStatus = "Pending"; db.transaction([storeName], "readwrite").objectStore(storeName).put(item); renderHistoryList(type);
             };
             
             db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Voided", authName: authName });
@@ -713,18 +787,20 @@ function openShiftReport() {
             const validExp = e2.target.result.filter(exp => exp.shiftId === currentShiftId && exp.status !== "Voided" && exp.status !== "Void Pending");
             validExp.forEach(exp => { totalExpenses += exp.amount; });
 
-            document.getElementById("shift-customers").innerText = totalCustomers; document.getElementById("shift-plates").innerText = totalPlates;
-            document.getElementById("shift-omset").innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`; document.getElementById("shift-cash").innerText = `Rp ${totalCash.toLocaleString('id-ID')}`;
-            document.getElementById("shift-qris").innerText = `Rp ${totalQris.toLocaleString('id-ID')}`; document.getElementById("shift-expenses").innerText = `Rp ${totalExpenses.toLocaleString('id-ID')}`;
-            document.getElementById("shift-net").innerText = `Rp ${(totalCash - totalExpenses).toLocaleString('id-ID')}`;
+            calculateLiveDrawer((liveDrawer) => {
+                document.getElementById("shift-customers").innerText = totalCustomers; document.getElementById("shift-plates").innerText = totalPlates;
+                document.getElementById("shift-omset").innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`; document.getElementById("shift-cash").innerText = `Rp ${totalCash.toLocaleString('id-ID')}`;
+                document.getElementById("shift-qris").innerText = `Rp ${totalQris.toLocaleString('id-ID')}`; document.getElementById("shift-expenses").innerText = `Rp ${totalExpenses.toLocaleString('id-ID')}`;
+                document.getElementById("shift-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`;
 
-            let foodHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px dashed #ddd; padding:4px 0;"><span>${name}</span><strong>${qty}x</strong></div>`; }
-            if(foodHtml === "") foodHtml = "No food sold yet."; document.getElementById("shift-food-list").innerHTML = foodHtml;
-            
-            document.getElementById("shift-modal-active-buttons").style.display = "flex"; document.getElementById("shift-modal-past-buttons").style.display = "none";
-            document.getElementById("shift-report-modal").classList.remove("hidden");
-            
-            window.currentShiftData = { isPast: false, totalCustomers, totalPlates, totalOmset, totalCash, totalQris, totalExpenses, net: totalCash - totalExpenses, foodSummary };
+                let foodHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px dashed #ddd; padding:4px 0;"><span>${name}</span><strong>${qty}x</strong></div>`; }
+                if(foodHtml === "") foodHtml = "No food sold yet."; document.getElementById("shift-food-list").innerHTML = foodHtml;
+                
+                document.getElementById("shift-modal-active-buttons").style.display = "flex"; document.getElementById("shift-modal-past-buttons").style.display = "none";
+                document.getElementById("shift-report-modal").classList.remove("hidden");
+                
+                window.currentShiftData = { isPast: false, totalCustomers, totalPlates, totalOmset, totalCash, totalQris, totalExpenses, net: liveDrawer, foodSummary };
+            });
         };
     };
 }
@@ -761,15 +837,14 @@ async function printShiftReport() {
 
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 
-async function logoutShift() { 
-    if(!confirm("Are you sure you want to end your shift and log out? This will finalize your shift report and send it to the database.")) return;
+// NEW LOGOUT SEQUENCE (Forces a Cash Drop declaration)
+function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
+
+async function executeFinalLogout() { 
     const data = window.currentShiftData;
-    
     const shiftPayload = {
-        shiftId: currentShiftId, timestamp: new Date().toISOString(), cashier: currentCashier,
-        loginTime: currentLoginTime, logoutTime: new Date().toISOString(), 
-        totalCustomers: data.totalCustomers, totalPlates: data.totalPlates, totalOmset: data.totalOmset, totalCash: data.totalCash,
-        totalQris: data.totalQris, totalExpenses: data.totalExpenses, netCash: data.net,
+        shiftId: currentShiftId, timestamp: new Date().toISOString(), cashier: currentCashier, loginTime: currentLoginTime, logoutTime: new Date().toISOString(), 
+        totalCustomers: data.totalCustomers, totalPlates: data.totalPlates, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalExpenses: data.totalExpenses, netCash: data.net,
         foodSummary: data.foodSummary, syncStatus: "Pending"
     };
 
@@ -790,9 +865,7 @@ async function logoutShift() {
 function openExpenseModal() {
     document.getElementById("expense-modal").classList.remove("hidden");
     const list = document.getElementById("expense-category-list"); list.innerHTML = "";
-    db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (e) => {
-        e.target.result.forEach(cat => { const opt = document.createElement("option"); opt.value = cat.name; list.appendChild(opt); });
-    };
+    db.transaction(["expense_categories"], "readonly").objectStore("expense_categories").getAll().onsuccess = (e) => { e.target.result.forEach(cat => { const opt = document.createElement("option"); opt.value = cat.name; list.appendChild(opt); }); };
 }
 function closeExpenseModal() { document.getElementById("expense-modal").classList.add("hidden"); }
 
@@ -802,13 +875,9 @@ function saveExpense() {
     if (amount <= 0 || !category) return alert("Please enter a valid amount and category.");
     db.transaction(["expense_categories"], "readwrite").objectStore("expense_categories").put({ name: category });
 
-    const payload = {
-        expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier,
-        shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", syncStatus: "Pending"
-    };
+    const payload = { expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", syncStatus: "Pending" };
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
-    closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = "";
-    alert("Expense Recorded!"); runBackgroundSync();
+    closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Expense Recorded!"); runBackgroundSync();
 }
 
 function openSettings() {
@@ -819,62 +888,48 @@ function closeSettings() { document.getElementById("settings-modal").classList.a
 
 async function runBackgroundSync() {
     if (!navigator.onLine) return; 
-    let tx = db.transaction(["orders"], "readonly");
-    let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
+    let tx = db.transaction(["orders"], "readonly"); let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
     for (const order of items) {
         if (order.syncStatus === "Pending") {
-            try {
-                let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) });
-                if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); }
-            } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) {}
         }
     }
 
-    tx = db.transaction(["expenses"], "readonly");
-    items = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
+    tx = db.transaction(["expenses"], "readonly"); items = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
     for (const exp of items) {
         if (exp.syncStatus === "Pending") {
-            try {
-                let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncExpense", data: exp }) });
-                if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); }
-            } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
         }
     }
 
-    tx = db.transaction(["void_requests"], "readonly");
-    items = await new Promise(res => tx.objectStore("void_requests").getAll().onsuccess = e => res(e.target.result));
+    // SYNC CASH DROPS
+    tx = db.transaction(["cash_drops"], "readonly"); items = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
+    for (const drop of items) {
+        if (drop.syncStatus === "Pending") {
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
+        }
+    }
+
+    tx = db.transaction(["void_requests"], "readonly"); items = await new Promise(res => tx.objectStore("void_requests").getAll().onsuccess = e => res(e.target.result));
     for (const req of items) {
         try {
-            const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
-            const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) });
-            if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
+            const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
+            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
         } catch(e) {}
     }
 
-    tx = db.transaction(["shift_reports"], "readonly");
-    items = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
+    tx = db.transaction(["shift_reports"], "readonly"); items = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
     for (const report of items) {
         if (report.syncStatus === "Pending") {
-            try {
-                let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: report }) });
-                if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); }
-            } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
         }
     }
     
-    tx = db.transaction(["unsynced_members"], "readonly");
-    items = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
+    tx = db.transaction(["unsynced_members"], "readonly"); items = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
     for (const mem of items) {
-        try {
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) });
-            if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); }
-        } catch(e) {}
+        try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
     }
-
     syncMasterData();
 }
 
-window.onload = async () => {
-    await initDB(); await syncMasterData(); loadSettingsForCart(); checkActiveSession(); window.setInterval(runBackgroundSync, 30000); 
-};
+window.onload = async () => { await initDB(); await syncMasterData(); loadSettingsForCart(); checkActiveSession(); window.setInterval(runBackgroundSync, 30000); };
