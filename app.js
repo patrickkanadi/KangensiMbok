@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 14; 
+const DB_VERSION = 15; // Upgraded for Shift Pausing!
 let db;
 
 let tablePrefix = "A"; 
@@ -9,6 +9,7 @@ let currentOrderIndex = 0;
 let activePlateIndex = 0; 
 let taxRatePercent = 0;   
 let currentCashier = "";
+let currentPin = "";
 let currentShiftId = "";
 let currentLoginTime = "";
 let nextTableNumber = 1; 
@@ -37,6 +38,8 @@ function initDB() {
             if (!db.objectStoreNames.contains("promo_codes")) db.createObjectStore("promo_codes", { keyPath: "code" }); 
             if (!db.objectStoreNames.contains("shift_reports")) db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("past_shifts")) db.createObjectStore("past_shifts", { keyPath: "shiftId" }); 
+            // NEW: Table to save paused shifts
+            if (!db.objectStoreNames.contains("active_shifts")) db.createObjectStore("active_shifts", { keyPath: "pin" }); 
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
         request.onerror = (event) => { reject(event.target.errorCode); };
@@ -58,6 +61,9 @@ function restoreUnpaidTables() {
     } else { activeOrders = []; nextTableNumber = 1; }
 }
 
+// ---------------------------------------------------------
+// NEW: SHIFT RESUME LOGIC
+// ---------------------------------------------------------
 function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value;
     if (!pinInput) return alert("Please enter a PIN");
@@ -66,10 +72,34 @@ function attemptLogin() {
     store.get(pinInput).onsuccess = (e) => {
         const staffMember = e.target.result;
         if (staffMember) {
-            const sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
-            localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
-            loadSessionData(sessionData);
-        } else { alert("Invalid PIN."); document.getElementById("cashier-pin").value = ""; }
+            // Check if this cashier has a paused shift
+            db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
+                let sessionData;
+                if (shiftRes.target.result) {
+                    // RESUME SHIFT!
+                    sessionData = {
+                        name: staffMember.name, pin: staffMember.pin,
+                        shiftId: shiftRes.target.result.shiftId,
+                        loginTime: shiftRes.target.result.loginTime
+                    };
+                } else {
+                    // NEW SHIFT!
+                    sessionData = {
+                        name: staffMember.name, pin: staffMember.pin,
+                        shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString()
+                    };
+                    // Save to active shifts table
+                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({
+                        pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime
+                    });
+                }
+                
+                localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
+                loadSessionData(sessionData);
+            };
+        } else {
+            alert("Invalid PIN."); document.getElementById("cashier-pin").value = "";
+        }
     };
 }
 
@@ -79,12 +109,18 @@ function checkActiveSession() {
 }
 
 function loadSessionData(session) {
-    currentCashier = session.name; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
+    currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
     document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
     document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("cashier-pin").value = "";
     document.getElementById("shift-login-indicator").innerText = `Logged in: ${new Date(currentLoginTime).toLocaleTimeString('id-ID')}`;
     
     restoreUnpaidTables(); loadMenuUI(); initTabs(); 
+}
+
+// INSTANTLY LOCKS THE SCREEN WITHOUT ENDING THE SHIFT
+function lockScreen() {
+    localStorage.removeItem("pos_active_session");
+    window.location.reload(); 
 }
 
 async function syncMasterData() {
@@ -476,7 +512,8 @@ async function finalizePayment(shouldPrint) {
         shiftId: currentShiftId, tablePrefix: currentOrder.name,
         customerName: currentOrder.customerName, customerPhone: currentOrder.customerPhone,
         orderStatus: finalStatus, syncStatus: "Pending", voidAuth: "N/A", 
-        plates: currentOrder.plates, subtotal: totals.baseSubtotal, discounts: totals.totalSavings, promoName: totals.promoName, grandTotal: totals.grandTotal,
+        plates: currentOrder.plates, 
+        subtotal: totals.baseSubtotal, discounts: totals.totalSavings, promoName: totals.promoName, grandTotal: totals.grandTotal,
         paymentMethod: (cashPaid > 0 && qrisPaid > 0) ? "Split" : (qrisPaid > 0 ? "QRIS" : "Cash"),
         cashAmount: cashPaid, qrisAmount: qrisPaid
     };
@@ -496,7 +533,7 @@ async function getDynamicSettings() {
 
 async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeDue) {
     const settings = await getDynamicSettings();
-    const storeName = settings["Store_Name"] || "BUFFET POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
+    const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
     const footer1 = settings["Footer_1"] || "THANK YOU!"; const footer2 = settings["Footer_2"] || "Please come again";
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     
@@ -535,9 +572,6 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
     `;
 }
 
-// ---------------------------------------------------------
-// SHIFT HISTORY RECALL ENGINE
-// ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
 
@@ -665,7 +699,7 @@ function openShiftReport() {
 
 async function printShiftReport() {
     const settings = await getDynamicSettings();
-    const storeName = settings["Store_Name"] || "BUFFET POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
+    const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     const data = window.currentShiftData;
 
@@ -712,6 +746,7 @@ async function logoutShift() {
     };
 
     db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
+    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(currentPin); // Wipes from active shift queue
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
 
     if (navigator.onLine) {
