@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 15; // Upgraded for Shift Pausing!
+const DB_VERSION = 16; 
 let db;
 
 let tablePrefix = "A"; 
@@ -13,6 +13,7 @@ let currentPin = "";
 let currentShiftId = "";
 let currentLoginTime = "";
 let nextTableNumber = 1; 
+let currentVoidTarget = { type: null, id: null };
 
 let globalMenuData = [];
 let currentCategory = "";
@@ -38,7 +39,6 @@ function initDB() {
             if (!db.objectStoreNames.contains("promo_codes")) db.createObjectStore("promo_codes", { keyPath: "code" }); 
             if (!db.objectStoreNames.contains("shift_reports")) db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("past_shifts")) db.createObjectStore("past_shifts", { keyPath: "shiftId" }); 
-            // NEW: Table to save paused shifts
             if (!db.objectStoreNames.contains("active_shifts")) db.createObjectStore("active_shifts", { keyPath: "pin" }); 
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
@@ -61,9 +61,6 @@ function restoreUnpaidTables() {
     } else { activeOrders = []; nextTableNumber = 1; }
 }
 
-// ---------------------------------------------------------
-// NEW: SHIFT RESUME LOGIC
-// ---------------------------------------------------------
 function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value;
     if (!pinInput) return alert("Please enter a PIN");
@@ -72,34 +69,18 @@ function attemptLogin() {
     store.get(pinInput).onsuccess = (e) => {
         const staffMember = e.target.result;
         if (staffMember) {
-            // Check if this cashier has a paused shift
             db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
                 let sessionData;
                 if (shiftRes.target.result) {
-                    // RESUME SHIFT!
-                    sessionData = {
-                        name: staffMember.name, pin: staffMember.pin,
-                        shiftId: shiftRes.target.result.shiftId,
-                        loginTime: shiftRes.target.result.loginTime
-                    };
+                    sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
                 } else {
-                    // NEW SHIFT!
-                    sessionData = {
-                        name: staffMember.name, pin: staffMember.pin,
-                        shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString()
-                    };
-                    // Save to active shifts table
-                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({
-                        pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime
-                    });
+                    sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
+                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime });
                 }
-                
                 localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
                 loadSessionData(sessionData);
             };
-        } else {
-            alert("Invalid PIN."); document.getElementById("cashier-pin").value = "";
-        }
+        } else { alert("Invalid PIN."); document.getElementById("cashier-pin").value = ""; }
     };
 }
 
@@ -117,11 +98,7 @@ function loadSessionData(session) {
     restoreUnpaidTables(); loadMenuUI(); initTabs(); 
 }
 
-// INSTANTLY LOCKS THE SCREEN WITHOUT ENDING THE SHIFT
-function lockScreen() {
-    localStorage.removeItem("pos_active_session");
-    window.location.reload(); 
-}
+function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 async function syncMasterData() {
     const statusText = document.getElementById("network-text");
@@ -328,16 +305,13 @@ function loadSettingsForCart() {
 
 function addItemToCart(item, portionType, basePrice) {
     if (activeOrders.length === 0) return alert("Please open a table first by clicking '+ Add Table'!");
-    
     let effectivePrice = basePrice;
     if (item.specificDiscount > 0) effectivePrice = basePrice - (basePrice * (item.specificDiscount / 100));
 
     const activePlate = activeOrders[currentOrderIndex].plates[activePlateIndex];
     const existingItem = activePlate.items.find(i => i.itemId === item.itemId && i.portionType === portionType);
     
-    if (existingItem) {
-        existingItem.qty += 1;
-    } else {
+    if (existingItem) { existingItem.qty += 1; } else {
         activePlate.items.push({ 
             itemId: item.itemId, name: portionType === 0.5 ? `${item.name} (½)` : item.name, 
             portionType: portionType, originalPrice: basePrice, price: effectivePrice, qty: 1,
@@ -572,6 +546,9 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
     `;
 }
 
+// ---------------------------------------------------------
+// HISTORY & VOID ENGINE
+// ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
 
@@ -586,7 +563,7 @@ function renderHistoryList(type) {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Voided</span>` :
                             o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Waiting for Admin</span>` :
                             `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
-                let btn = (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Request Void</button>` : '';
+                let btn = (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
                 container.innerHTML += `<div class="history-row"><div><strong>${o.tablePrefix} (${o.customerName})</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
             });
         };
@@ -598,7 +575,7 @@ function renderHistoryList(type) {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Voided</span>` :
                             exp.status === "Void Pending" ? `<span class="status-badge status-pending">Waiting for Admin</span>` :
                             `<span class="status-badge status-paid">Active</span>`;
-                let btn = exp.status !== "Voided" && exp.status !== "Void Pending" ? `<button onclick="requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Request Void</button>` : '';
+                let btn = exp.status !== "Voided" && exp.status !== "Void Pending" ? `<button onclick="requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
                 container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString()} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
             });
         };
@@ -617,21 +594,63 @@ function renderHistoryList(type) {
     }
 }
 
+// THE NEW ADMIN OVERRIDE ENGINE
+function requestVoid(type, id) {
+    currentVoidTarget = { type, id };
+    document.getElementById("admin-void-pin").value = "";
+    document.getElementById("admin-void-modal").classList.remove("hidden");
+}
+
+function closeAdminVoidModal() { document.getElementById("admin-void-modal").classList.add("hidden"); }
+
+function submitRemoteVoid() {
+    const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
+    db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (e) => {
+        const item = e.target.result;
+        if (type === 'orders') item.orderStatus = "Void Pending"; else item.status = "Void Pending";
+        db.transaction([storeName], "readwrite").objectStore(storeName).put(item);
+        renderHistoryList(type); 
+    };
+    db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Waiting" });
+    closeAdminVoidModal(); runBackgroundSync();
+}
+
+function confirmAdminVoid() {
+    const pin = document.getElementById("admin-void-pin").value;
+    if (!pin) return alert("Please enter a PIN.");
+    
+    db.transaction(["staff"], "readonly").objectStore("staff").get(pin).onsuccess = (e) => {
+        const staff = e.target.result;
+        if (staff && staff.role.toLowerCase() === 'admin') {
+            const type = currentVoidTarget.type; const id = currentVoidTarget.id; const storeName = type === 'orders' ? "orders" : "expenses";
+            
+            db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
+                const item = ev.target.result;
+                if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = staff.name; } 
+                else { item.status = "Voided"; item.voidAuth = staff.name; }
+                item.syncStatus = "Pending"; 
+                db.transaction([storeName], "readwrite").objectStore(storeName).put(item);
+                renderHistoryList(type);
+            };
+            
+            db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Voided", authName: staff.name });
+            closeAdminVoidModal(); runBackgroundSync(); alert("Transaction instantly voided by: " + staff.name);
+        } else { alert("Invalid PIN or you do not have Admin privileges."); }
+    };
+}
+
 function viewPastShift(shiftId) {
     db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(shiftId).onsuccess = (e) => {
-        const s = e.target.result;
-        if(!s) return;
+        const s = e.target.result; if(!s) return;
         
-        document.getElementById("shift-customers").innerText = s.totalCustomers;
-        document.getElementById("shift-plates").innerText = s.totalPlates;
+        document.getElementById("shift-customers").innerText = s.totalCustomers; document.getElementById("shift-plates").innerText = s.totalPlates;
         document.getElementById("shift-omset").innerText = `Rp ${Number(String(s.totalOmset).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
         document.getElementById("shift-cash").innerText = `Rp ${Number(String(s.totalCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
         document.getElementById("shift-qris").innerText = `Rp ${Number(String(s.totalQris).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
         document.getElementById("shift-expenses").innerText = `Rp ${Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
         document.getElementById("shift-net").innerText = `Rp ${Number(String(s.netCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
         
-        let foodHtml = s.foodSummaryStr.replace(/\n/g, '<br>');
-        document.getElementById("shift-food-list").innerHTML = `<div style="font-size:12px;">${foodHtml}</div>`;
+        let foodHtml = s.foodSummaryStr.replace(/\n/g, '<br>'); document.getElementById("shift-food-list").innerHTML = `<div style="font-size:12px;">${foodHtml}</div>`;
         
         window.currentShiftData = {
             isPast: true, shiftId: s.shiftId, cashier: s.cashier, totalCustomers: s.totalCustomers, totalPlates: s.totalPlates,
@@ -640,23 +659,9 @@ function viewPastShift(shiftId) {
             net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: s.foodSummaryStr
         };
 
-        document.getElementById("shift-modal-active-buttons").style.display = "none";
-        document.getElementById("shift-modal-past-buttons").style.display = "flex";
+        document.getElementById("shift-modal-active-buttons").style.display = "none"; document.getElementById("shift-modal-past-buttons").style.display = "flex";
         document.getElementById("shift-report-modal").classList.remove("hidden");
     };
-}
-
-function requestVoid(type, id) {
-    if(!confirm("Are you sure you want to request an Admin Void for this transaction?")) return;
-    const storeName = type === 'orders' ? "orders" : "expenses";
-    db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (e) => {
-        const item = e.target.result;
-        if (type === 'orders') item.orderStatus = "Void Pending"; else item.status = "Void Pending";
-        db.transaction([storeName], "readwrite").objectStore(storeName).put(item);
-        renderHistoryList(type); 
-    };
-    db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type });
-    runBackgroundSync();
 }
 
 function openShiftReport() {
@@ -675,21 +680,15 @@ function openShiftReport() {
             const validExp = e2.target.result.filter(exp => exp.shiftId === currentShiftId && exp.status !== "Voided" && exp.status !== "Void Pending");
             validExp.forEach(exp => { totalExpenses += exp.amount; });
 
-            document.getElementById("shift-customers").innerText = totalCustomers;
-            document.getElementById("shift-plates").innerText = totalPlates;
-            document.getElementById("shift-omset").innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`;
-            document.getElementById("shift-cash").innerText = `Rp ${totalCash.toLocaleString('id-ID')}`;
-            document.getElementById("shift-qris").innerText = `Rp ${totalQris.toLocaleString('id-ID')}`;
-            document.getElementById("shift-expenses").innerText = `Rp ${totalExpenses.toLocaleString('id-ID')}`;
+            document.getElementById("shift-customers").innerText = totalCustomers; document.getElementById("shift-plates").innerText = totalPlates;
+            document.getElementById("shift-omset").innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`; document.getElementById("shift-cash").innerText = `Rp ${totalCash.toLocaleString('id-ID')}`;
+            document.getElementById("shift-qris").innerText = `Rp ${totalQris.toLocaleString('id-ID')}`; document.getElementById("shift-expenses").innerText = `Rp ${totalExpenses.toLocaleString('id-ID')}`;
             document.getElementById("shift-net").innerText = `Rp ${(totalCash - totalExpenses).toLocaleString('id-ID')}`;
 
-            let foodHtml = "";
-            for (const [name, qty] of Object.entries(foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px dashed #ddd; padding:4px 0;"><span>${name}</span><strong>${qty}x</strong></div>`; }
-            if(foodHtml === "") foodHtml = "No food sold yet.";
-            document.getElementById("shift-food-list").innerHTML = foodHtml;
+            let foodHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px dashed #ddd; padding:4px 0;"><span>${name}</span><strong>${qty}x</strong></div>`; }
+            if(foodHtml === "") foodHtml = "No food sold yet."; document.getElementById("shift-food-list").innerHTML = foodHtml;
             
-            document.getElementById("shift-modal-active-buttons").style.display = "flex";
-            document.getElementById("shift-modal-past-buttons").style.display = "none";
+            document.getElementById("shift-modal-active-buttons").style.display = "flex"; document.getElementById("shift-modal-past-buttons").style.display = "none";
             document.getElementById("shift-report-modal").classList.remove("hidden");
             
             window.currentShiftData = { isPast: false, totalCustomers, totalPlates, totalOmset, totalCash, totalQris, totalExpenses, net: totalCash - totalExpenses, foodSummary };
@@ -704,14 +703,10 @@ async function printShiftReport() {
     const data = window.currentShiftData;
 
     let foodHtml = "";
-    if (data.isPast) {
-        foodHtml = `<div style="font-size:11px; text-align:left; white-space:pre-wrap;">${data.foodStr}</div>`;
-    } else {
-        for (const [name, qty] of Object.entries(data.foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>${name}</span><span>${qty}x</span></div>`; }
-    }
+    if (data.isPast) { foodHtml = `<div style="font-size:11px; text-align:left; white-space:pre-wrap;">${data.foodStr}</div>`; } 
+    else { for (const [name, qty] of Object.entries(data.foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>${name}</span><span>${qty}x</span></div>`; } }
 
-    const printShiftId = data.isPast ? data.shiftId : currentShiftId;
-    const printCashier = data.isPast ? data.cashier : currentCashier;
+    const printShiftId = data.isPast ? data.shiftId : currentShiftId; const printCashier = data.isPast ? data.cashier : currentCashier;
 
     printArea.innerHTML = `
         <div style="text-align:center; margin-bottom:10px;"><h2 style="margin:0;">${storeName}</h2><div style="font-size:10px;">${storeAddress}</div><div style="font-size:10px;">${dateStr}</div></div>
@@ -746,7 +741,7 @@ async function logoutShift() {
     };
 
     db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
-    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(currentPin); // Wipes from active shift queue
+    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(currentPin); 
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
 
     if (navigator.onLine) {
@@ -818,7 +813,7 @@ async function runBackgroundSync() {
     for (const req of items) {
         try {
             const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid";
-            const payload = req.type === 'orders' ? { orderId: req.id } : { expenseId: req.id };
+            const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
             let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) });
             if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
         } catch(e) {}
