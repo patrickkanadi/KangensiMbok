@@ -170,6 +170,7 @@
         </div>
     </div>
 
+    <!-- MODALS -->
     <div id="add-table-modal" class="modal-overlay hidden">
         <div class="modal-content modal-standard">
             <h2 style="margin-top:0;">📝 New Table Order</h2>
@@ -212,6 +213,20 @@
             </div>
             <div class="history-list" id="history-container" style="max-height:400px; overflow-y:auto; background:#f9f9f9;"></div>
             <button onclick="closeHistoryModal()" style="width:100%; padding:15px; margin-top:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Close</button>
+        </div>
+    </div>
+
+    <!-- NEW ADMIN VOID MODAL -->
+    <div id="admin-void-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-standard" style="text-align:center;">
+            <h2 style="margin-top:0; color:#e74c3c;">⚠️ Admin Override</h2>
+            <p style="color:#7f8c8d; margin-bottom:20px;">Enter an Admin PIN to instantly void, or send a request to the server.</p>
+            <input type="password" id="admin-void-pin" placeholder="****" inputmode="numeric" style="font-size:24px; text-align:center; margin-bottom:15px; width:100%; padding:10px; border:2px solid #bdc3c7; border-radius:8px;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <button onclick="closeAdminVoidModal()" style="flex:1; min-width:80px; padding:15px; background:#bdc3c7; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Cancel</button>
+                <button onclick="submitRemoteVoid()" style="flex:1; min-width:100px; padding:15px; background:#f39c12; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Send Request</button>
+                <button onclick="confirmAdminVoid()" style="flex:1; min-width:100px; padding:15px; background:#e74c3c; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Insta-Void</button>
+            </div>
         </div>
     </div>
 
