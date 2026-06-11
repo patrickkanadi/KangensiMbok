@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Kangen Si Mbok</title>
+    <title>KSB POS</title>
     <link rel="manifest" href="manifest.json">
     <style>
         * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -34,7 +34,7 @@
         .sub-cat-btn { padding: 8px 16px; border: 1px solid #3498db; background: white; color: #3498db; border-radius: 20px; font-size: 13px; font-weight: bold; cursor: pointer; white-space: nowrap; }
         .sub-cat-btn.active { background: #3498db; color: white; }
         
-        #product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; padding: 15px; overflow-y: auto; align-content: start; background: #f4f7f6; flex: 1;}
+        #product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 15px; padding: 15px; overflow-y: auto; align-content: start; background: #f4f7f6; flex: 1;}
         .product-card { background: #fff; border: 1px solid #ddd; border-radius: 8px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); display: flex; flex-direction: column; justify-content: space-between; padding-top: 15px; }
         .product-info { padding: 0 10px 15px 10px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
         .product-actions { display: flex; border-top: 1px solid #eee; }
@@ -101,40 +101,22 @@
             @page { margin: 2mm; } 
         }
 
-        /* 📱 RESPONSIVE DESIGN (PHONES & PORTRAIT TABLETS) */
+        /* RESPONSIVE */
         @media (max-width: 900px), (orientation: portrait) {
             #main-workspace { flex-direction: column; }
-            
-            #menu-section { 
-                flex: 1; 
-                border-right: none; 
-                border-bottom: 2px solid #bdc3c7; 
-                /* Limits menu height so Cart is always visible at the bottom */
-                max-height: 50vh; 
-            }
-            
+            #menu-section { flex: 1; border-right: none; border-bottom: 2px solid #bdc3c7; max-height: 50vh; }
             #cart-section { flex: 1; }
-
-            /* Shrink products to fit at least 2 or 3 in a row on mobile */
             #product-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; padding: 10px; }
             .product-card h4 { font-size: 13px; }
             .btn-add { font-size: 13px; padding: 10px; }
-
-            /* Top Bar wraps gracefully */
             #top-bar { flex-direction: column; text-align: center; justify-content: center; }
-            
-            /* Modal Adjustments */
             .modal-content { padding: 20px; }
-            .shift-grid { grid-template-columns: 1fr 1fr; } /* Stacks the 6 boxes into 2 columns */
+            .shift-grid { grid-template-columns: 1fr 1fr; } 
             .shift-card[style*="grid-column: span 3;"] { grid-column: span 2 !important; }
-
-            /* Review Modal wrapping */
             .payment-inputs { flex-direction: column; gap: 10px; }
         }
-
-        /* Extremely small screens (Mobile Phones) */
         @media (max-width: 480px) {
-            .shift-grid { grid-template-columns: 1fr; } /* 1 column shift report */
+            .shift-grid { grid-template-columns: 1fr; } 
             .shift-card[style*="grid-column: span 3;"] { grid-column: span 1 !important; }
             .history-list button { margin-top: 5px; width: 100%; }
         }
@@ -144,10 +126,10 @@
 
     <div id="login-screen">
         <div class="login-box">
-            <h2>POS Login</h2>
+            <h2>KSB POS</h2>
             <p>Enter Cashier PIN</p>
             <input type="password" id="cashier-pin" placeholder="****" inputmode="numeric">
-            <button onclick="attemptLogin()">Open Shift</button>
+            <button onclick="attemptLogin()">Log In / Open Shift</button>
         </div>
     </div>
 
@@ -160,11 +142,11 @@
                 <button class="btn-top" style="background:#e67e22; border-color:#e67e22;" onclick="openExpenseModal()">💸 Expenses</button>
                 <button class="btn-top" style="background:#2980b9; border-color:#2980b9;" onclick="openShiftReport()">📊 Shift Report</button>
                 <button class="btn-top" style="background:transparent;" onclick="openSettings()">⚙️ Settings</button>
+                <button class="btn-top" style="background:#7f8c8d; border-color:#7f8c8d;" onclick="lockScreen()">🔒 Lock</button>
             </div>
         </div>
 
         <div id="main-workspace">
-            <!-- Top Half on Mobile / Left Half on PC -->
             <div id="menu-section">
                 <div id="menu-search-bar"><input type="text" id="search-input" placeholder="🔍 Search menu..." onkeyup="filterMenuBySearch()"></div>
                 <div class="category-tabs" id="category-container"></div>
@@ -172,7 +154,6 @@
                 <div id="product-grid"></div>
             </div>
 
-            <!-- Bottom Half on Mobile / Right Half on PC -->
             <div id="cart-section">
                 <div id="customer-tabs"></div>
                 <div id="plates-container"></div>
@@ -254,7 +235,7 @@
             <div style="display: flex; gap: 10px; margin-top: 20px; flex-wrap:wrap;" id="shift-modal-active-buttons">
                 <button onclick="closeShiftReport()" style="flex:1; min-width:100px; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Working</button>
                 <button onclick="printShiftReport()" style="flex:1; min-width:100px; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">🖨️ Print</button>
-                <button onclick="logoutShift()" style="flex:1; min-width:100px; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Log Out</button>
+                <button onclick="logoutShift()" style="flex:1; min-width:100px; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">End Shift & Logout</button>
             </div>
             
             <div style="display: none; gap: 10px; margin-top: 20px; flex-wrap:wrap;" id="shift-modal-past-buttons">
