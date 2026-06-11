@@ -1,16 +1,25 @@
 {
   "name": "Kangen si Mbok",
-  "short_name": "KSM POS",
+  "short_name": "KSB POS",
+  "description": "Enterprise Point of Sale System for Buffet Management",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#2c3e50",
+  "background_color": "#f4f7f6",
   "theme_color": "#2c3e50",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/1011/1011407.png", 
+      "src": "https://cdn-icons-png.flaticon.com/512/1011/1011407.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1011/1011407.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }
