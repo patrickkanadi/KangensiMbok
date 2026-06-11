@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Buffet POS System</title>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { margin: 0; padding: 0; background-color: #f4f7f6; height: 100vh; overflow: hidden; }
+        .hidden { display: none !important; }
+
+        #login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background-color: #2c3e50; color: white; }
+        .login-box { background: white; padding: 40px; border-radius: 12px; text-align: center; color: #333; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+        .login-box input { font-size: 24px; padding: 10px; text-align: center; width: 200px; margin-bottom: 20px; border: 2px solid #ddd; border-radius: 8px; }
+        .login-box button { background: #27ae60; color: white; border: none; padding: 15px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; }
+
+        #pos-screen { display: flex; flex-direction: column; height: 100vh; }
+        #top-bar { background: #2c3e50; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .status-indicator { display: flex; align-items: center; gap: 8px; }
+        .dot-online { height: 12px; width: 12px; background-color: #2ecc71; border-radius: 50%; }
+        .btn-top { margin-left: 8px; padding: 6px 12px; cursor: pointer; border: 1px solid white; color: white; border-radius: 4px; font-weight: bold; }
+        
+        #main-workspace { display: flex; flex: 1; overflow: hidden; }
+        #menu-section { flex: 6; display: flex; flex-direction: column; border-right: 2px solid #ddd; background: #fff; }
+        #menu-search-bar { padding: 15px; border-bottom: 1px solid #eee; }
+        #menu-search-bar input { width: 100%; padding: 12px 15px; font-size: 16px; border: 2px solid #bdc3c7; border-radius: 8px; outline: none; }
+        
+        .category-tabs { display: flex; background: #ecf0f1; padding: 10px; gap: 10px; overflow-x: auto; }
+        .cat-btn { padding: 15px 20px; border: none; background: white; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+        .cat-btn.active { background: #3498db; color: white; }
+        
+        .sub-category-tabs { display: flex; background: #fdfdfd; padding: 10px 15px; gap: 8px; overflow-x: auto; border-bottom: 1px solid #eee; }
+        .sub-cat-btn { padding: 8px 16px; border: 1px solid #3498db; background: white; color: #3498db; border-radius: 20px; font-size: 13px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+        .sub-cat-btn.active { background: #3498db; color: white; }
+        
+        #product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; padding: 15px; overflow-y: auto; align-content: start; background: #f4f7f6; flex: 1;}
+        .product-card { background: #fff; border: 1px solid #ddd; border-radius: 8px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); display: flex; flex-direction: column; justify-content: space-between; padding-top: 15px; }
+        .product-info { padding: 0 10px 15px 10px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
+        .product-actions { display: flex; border-top: 1px solid #eee; }
+        .btn-add { flex: 1; padding: 12px; border: none; background: #fdfdfd; cursor: pointer; font-weight: bold; font-size: 16px; color: #2c3e50; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;}
+        .btn-add:hover { background: #3498db; color: white; }
+        .btn-add:first-child { border-right: 1px solid #eee; border-bottom-right-radius: 0; }
+        .btn-add:last-child { border-bottom-left-radius: 0; }
+
+        #cart-section { flex: 4; display: flex; flex-direction: column; background: #fdfdfd; }
+        #customer-tabs { display: flex; background: #ecf0f1; padding: 10px; overflow-x: auto; gap: 5px; }
+        .cust-tab { padding: 10px 15px; background: #bdc3c7; border: none; border-radius: 5px 5px 0 0; cursor: pointer; white-space: nowrap; }
+        .cust-tab.active { background: white; font-weight: bold; border-bottom: 3px solid #3498db; }
+        
+        #plates-container { flex: 1; padding: 15px; overflow-y: auto; }
+        .plate-box { border: 2px dashed #bdc3c7; border-radius: 8px; padding: 10px; margin-bottom: 15px; background: white; cursor: pointer; }
+        .plate-header { font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .btn-new-plate { font-size: 12px; cursor: pointer; padding: 4px 8px; border-radius: 4px; border: 1px solid #ccc; background: white; }
+        
+        .qty-btn { background: #ecf0f1; border: 1px solid #bdc3c7; border-radius: 4px; width: 28px; height: 28px; font-weight: bold; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; }
+        
+        #checkout-panel { background: white; padding: 20px; border-top: 2px solid #ddd; box-shadow: 0 -5px 10px rgba(0,0,0,0.05); }
+        .totals-row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 16px; }
+        .grand-total { font-size: 24px; font-weight: bold; color: #e74c3c; margin-top: 10px; border-top: 2px solid #eee; padding-top: 10px; }
+        
+        .action-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        .btn-pay { background: #27ae60; color: white; padding: 15px; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
+        .btn-clear { background: #e74c3c; color: white; padding: 15px; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
+
+        /* MODALS */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-content { background: white; padding: 30px; border-radius: 12px; width: 450px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; }
+        .modal-large { width: 700px; }
+        .form-box { margin-bottom: 15px; }
+        .form-box label { display: block; font-weight: bold; margin-bottom: 5px; color: #2c3e50; }
+        .form-box input { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #bdc3c7; border-radius: 6px; }
+        
+        .payment-inputs { display: flex; gap: 15px; margin-top: 15px; margin-bottom: 20px; }
+        .payment-box { flex: 1; }
+        .payment-box label { display: block; font-weight: bold; margin-bottom: 5px; color: #2c3e50; }
+        .payment-box input { width: 100%; padding: 12px; font-size: 18px; border: 2px solid #bdc3c7; border-radius: 6px; }
+
+        /* HISTORY & SHIFT CSS */
+        .history-list { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; margin-top: 15px; }
+        .history-row { display: flex; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #eee; background: white; align-items: center; }
+        .history-row:last-child { border-bottom: none; }
+        .status-badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .status-paid { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-voided { background: #f8d7da; color: #721c24; }
+        
+        .shift-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .shift-card { background: #f4f7f6; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #eee; }
+        .shift-card h3 { margin: 0 0 5px 0; font-size: 20px; color: #2c3e50; }
+        .shift-card p { margin: 0; color: #7f8c8d; font-size: 12px; text-transform: uppercase; font-weight: bold; }
+
+        /* 58MM THERMAL RECEIPT CSS */
+        #printable-area { display: none; }
+        @media print {
+            body { background: white; margin: 0; padding: 0; }
+            #login-screen, #pos-screen, .modal-overlay { display: none !important; }
+            #printable-area { display: block !important; width: 48mm; font-family: 'Courier New', Courier, monospace; font-size: 11px; color: black; padding: 0; margin: 0 auto; }
+            @page { margin: 2mm; } 
+        }
+    </style>
+</head>
+<body>
+
+    <div id="login-screen">
+        <div class="login-box">
+            <h2>POS Login</h2>
+            <p>Enter Cashier PIN</p>
+            <input type="password" id="cashier-pin" placeholder="****" inputmode="numeric">
+            <button onclick="attemptLogin()">Open Shift</button>
+        </div>
+    </div>
+
+    <div id="pos-screen" class="hidden">
+        <div id="top-bar">
+            <div><strong>Shift:</strong> <span id="display-cashier">---</span> | <strong>Prefix:</strong> <span id="display-prefix">A</span></div>
+            <div class="status-indicator">
+                <span class="dot-online" id="network-dot"></span><span id="network-text">Initializing...</span>
+                <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openHistoryModal()">📋 History</button>
+                <button class="btn-top" style="background:#e67e22; border-color:#e67e22;" onclick="openExpenseModal()">💸 Expenses</button>
+                <button class="btn-top" style="background:#2980b9; border-color:#2980b9;" onclick="openShiftReport()">📊 Shift Report</button>
+                <button class="btn-top" style="background:transparent;" onclick="openSettings()">⚙️ Settings</button>
+            </div>
+        </div>
+
+        <div id="main-workspace">
+            <div id="menu-section">
+                <div id="menu-search-bar"><input type="text" id="search-input" placeholder="🔍 Search menu..." onkeyup="filterMenuBySearch()"></div>
+                <div class="category-tabs" id="category-container"></div>
+                <div class="sub-category-tabs" id="sub-category-container" style="display: none;"></div>
+                <div id="product-grid"></div>
+            </div>
+
+            <div id="cart-section">
+                <div id="customer-tabs"></div>
+                <div id="plates-container"></div>
+                <div id="checkout-panel">
+                    <div class="totals-row"><span>Subtotal:</span> <span id="cart-subtotal">Rp 0</span></div>
+                    <div class="totals-row"><span>Tax:</span> <span id="cart-tax">Rp 0</span></div>
+                    <div class="totals-row grand-total"><span>Total:</span> <span id="cart-total">Rp 0</span></div>
+                    <div class="action-buttons">
+                        <button class="btn-clear" onclick="clearTable()">Clear Table</button>
+                        <button class="btn-pay" onclick="reviewOrder()">Review Payment</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-table-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="width: 400px;">
+            <h2 style="margin-top:0;">📝 New Table Order</h2>
+            <div class="form-box">
+                <label>WhatsApp Number</label>
+                <input type="text" id="cust-phone" list="member-list" placeholder="0812..." autocomplete="off">
+                <datalist id="member-list"></datalist>
+            </div>
+            <div class="form-box"><label>Customer Name</label><input type="text" id="cust-name" placeholder="Leave blank for Walk-in"></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="closeAddTableModal()" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Cancel</button>
+                <button onclick="confirmAddTable()" style="flex:1; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Start Order</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="expense-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="width: 400px;">
+            <h2 style="margin-top:0;">💸 Record Expense</h2>
+            <div class="form-box"><label>Amount (Rp)</label><input type="number" id="exp-amount" placeholder="e.g. 50000"></div>
+            <div class="form-box">
+                <label>Category</label><input type="text" id="exp-category" list="expense-category-list" placeholder="Click or type category..." autocomplete="off">
+                <datalist id="expense-category-list"></datalist>
+            </div>
+            <div class="form-box"><label>Description</label><input type="text" id="exp-desc" placeholder="e.g., Bought ice from market"></div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button onclick="closeExpenseModal()" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Cancel</button>
+                <button onclick="saveExpense()" style="flex:1; padding:15px; background:#e67e22; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="history-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-large">
+            <h2 style="margin-top:0;">📋 System History</h2>
+            <div style="display:flex; gap:10px; margin-bottom:10px;">
+                <button onclick="renderHistoryList('orders')" style="flex:1; padding:10px; cursor:pointer;">🛍️ Active Shift Orders</button>
+                <button onclick="renderHistoryList('expenses')" style="flex:1; padding:10px; cursor:pointer;">💸 Active Shift Expenses</button>
+                <button onclick="renderHistoryList('shifts')" style="flex:1; padding:10px; cursor:pointer; background:#2c3e50; color:white;">📊 Past Shifts</button>
+            </div>
+            <div class="history-list" id="history-container" style="max-height:400px; overflow-y:auto; background:#f9f9f9;"></div>
+            <button onclick="closeHistoryModal()" style="width:100%; padding:15px; margin-top:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Close</button>
+        </div>
+    </div>
+
+    <div id="shift-report-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-large">
+            <h2 style="margin-top:0; border-bottom:2px solid #eee; padding-bottom:10px;">📊 Shift Report</h2>
+            <p style="margin-top:-5px; color:#7f8c8d; font-size:14px;" id="shift-login-indicator">Logged in: ---</p>
+            
+            <div class="shift-grid">
+                <div class="shift-card"><h3 id="shift-customers">0</h3><p>Customers Served</p></div>
+                <div class="shift-card"><h3 id="shift-plates">0</h3><p>Plates Used</p></div>
+                <div class="shift-card"><h3 id="shift-omset">Rp 0</h3><p>Gross Omset</p></div>
+                <div class="shift-card"><h3 id="shift-cash">Rp 0</h3><p>Cash Received</p></div>
+                <div class="shift-card"><h3 id="shift-qris">Rp 0</h3><p>QRIS Received</p></div>
+                <div class="shift-card"><h3 id="shift-expenses" style="color:#e74c3c;">Rp 0</h3><p>Expenses Paid</p></div>
+                <div class="shift-card" style="grid-column: span 3;"><h3 id="shift-net" style="color:#27ae60;">Rp 0</h3><p>Physical Cash in Drawer</p></div>
+            </div>
+            <h3 style="margin-bottom:10px;">🍔 Food Sold</h3>
+            <div id="shift-food-list" style="background:#f9f9f9; padding:15px; border-radius:8px; max-height:150px; overflow-y:auto; border:1px solid #eee; font-size:14px;"></div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 20px;" id="shift-modal-active-buttons">
+                <button onclick="closeShiftReport()" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Keep Working</button>
+                <button onclick="printShiftReport()" style="flex:1; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">🖨️ Print Report</button>
+                <button onclick="logoutShift()" style="flex:1; padding:15px; background:#c0392b; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">End Shift & Logout</button>
+            </div>
+            
+            <div style="display: none; gap: 10px; margin-top: 20px;" id="shift-modal-past-buttons">
+                <button onclick="closeShiftReport()" style="flex:1; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Close Viewer</button>
+                <button onclick="printShiftReport()" style="flex:1; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">🖨️ Print Report</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="review-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 style="margin-top:0; border-bottom:2px solid #eee; padding-bottom:10px;">🧾 Finalize Payment</h2>
+            
+            <div id="review-receipt-items" style="margin-bottom: 15px; max-height: 200px; overflow-y: auto; font-size: 14px;"></div>
+            
+            <div class="form-box" style="margin-bottom: 10px;">
+                <label>Apply Promo Code</label>
+                <input type="text" id="promo-code" list="promo-list" placeholder="Enter code..." style="text-transform: uppercase;" autocomplete="off" oninput="calculateReviewTotals(false)">
+                <datalist id="promo-list"></datalist>
+            </div>
+
+            <div style="background:#f9f9f9; padding:15px; border-radius:8px; border:1px solid #eee;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>Subtotal:</span> <strong id="review-subtotal">Rp 0</strong></div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:#e74c3c;" id="review-discount-row" class="hidden">
+                    <span>Total Discount:</span> <strong id="review-discount">-Rp 0</strong>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:#7f8c8d;"><span>Tax:</span> <span id="review-tax">Rp 0</span></div>
+                <div style="display:flex; justify-content:space-between; font-size:20px; color:#2c3e50; margin-top:10px; padding-top:10px; border-top:2px solid #ddd;">
+                    <strong>Grand Total:</strong> <strong id="review-grandtotal">Rp 0</strong>
+                </div>
+            </div>
+
+            <div class="payment-inputs">
+                <div class="payment-box"><label>💵 Cash</label><input type="number" id="pay-cash" value="0" onclick="this.select()" oninput="autoFillPayment('cash')"></div>
+                <div class="payment-box"><label>📱 QRIS</label><input type="number" id="pay-qris" value="0" onclick="this.select()" oninput="autoFillPayment('qris')"></div>
+            </div>
+            
+            <div style="display: flex; gap: 10px;">
+                <button onclick="closeReview()" style="flex:1; padding:15px; background:#bdc3c7; color:#333; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Back</button>
+                <button onclick="finalizePayment(false)" style="flex:1; padding:15px; background:#f39c12; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Pay (No Print)</button>
+                <button onclick="finalizePayment(true)" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:8px; font-weight:bold; font-size:16px; cursor:pointer;">🖨️ Pay & Print</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="width: 400px;">
+            <h2 style="margin-top:0;">⚙️ System Settings</h2>
+            <button onclick="syncMasterData()" style="width:100%; padding:15px; background:#3498db; color:white; border:none; border-radius:8px; margin-bottom:10px; cursor:pointer; font-weight:bold;">🔄 Force Database Sync</button>
+            <button onclick="closeSettings()" style="width:100%; padding:15px; background:#ecf0f1; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Close</button>
+        </div>
+    </div>
+
+    <div id="printable-area"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
