@@ -1,6 +1,6 @@
 {
-  "name": "Buffet POS System",
-  "short_name": "Buffet POS",
+  "name": "Kangen si Mbok",
+  "short_name": "KSM POS",
   "start_url": "./index.html",
   "display": "standalone",
   "orientation": "any",
