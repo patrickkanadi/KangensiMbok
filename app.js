@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 17; // Upgraded for Money Journal!
+const DB_VERSION = 17; // Upgraded for Money Journal
 let db;
 
 let tablePrefix = "A"; 
@@ -15,12 +15,14 @@ let currentLoginTime = "";
 let nextTableNumber = 1; 
 let currentVoidTarget = { type: null, id: null };
 
-window.masterDrawerBalance = 0; // Absolute drawer starting point from server
+window.masterDrawerBalance = 0; 
 window.currentReviewTotals = { baseSubtotal: 0, effectiveSubtotal: 0, totalSavings: 0, promoDiscount: 0, promoName: "", taxAmount: 0, grandTotal: 0 };
 window.currentShiftData = {}; 
-let isLoggingOut = false; // Flag to intercept end shift
+let isLoggingOut = false; 
 
-// PWA Install Prompt Logic
+// ---------------------------------------------------------
+// PWA INSTALL PROMPT
+// ---------------------------------------------------------
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
@@ -28,9 +30,17 @@ window.addEventListener('beforeinstallprompt', (e) => {
     if (installBtn) installBtn.classList.remove('hidden');
 });
 document.getElementById('install-btn')?.addEventListener('click', async () => {
-    if (deferredPrompt) { deferredPrompt.prompt(); const { outcome } = await deferredPrompt.userChoice; if (outcome === 'accepted') { document.getElementById('install-btn').classList.add('hidden'); } deferredPrompt = null; }
+    if (deferredPrompt) { 
+        deferredPrompt.prompt(); 
+        const { outcome } = await deferredPrompt.userChoice; 
+        if (outcome === 'accepted') { document.getElementById('install-btn').classList.add('hidden'); } 
+        deferredPrompt = null; 
+    }
 });
 
+// ---------------------------------------------------------
+// DATABASE INITIALIZATION
+// ---------------------------------------------------------
 function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -49,7 +59,6 @@ function initDB() {
             if (!db.objectStoreNames.contains("shift_reports")) db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("past_shifts")) db.createObjectStore("past_shifts", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("active_shifts")) db.createObjectStore("active_shifts", { keyPath: "pin" }); 
-            // NEW TABLE FOR MONEY JOURNAL
             if (!db.objectStoreNames.contains("cash_drops")) db.createObjectStore("cash_drops", { keyPath: "dropId" }); 
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
@@ -72,6 +81,9 @@ function restoreUnpaidTables() {
     } else { activeOrders = []; nextTableNumber = 1; }
 }
 
+// ---------------------------------------------------------
+// LOGIN & SESSION MANAGEMENT
+// ---------------------------------------------------------
 function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value;
     if (!pinInput) return alert("Please enter a PIN");
@@ -110,6 +122,9 @@ function loadSessionData(session) {
 
 function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
+// ---------------------------------------------------------
+// MASTER DATA SYNC (AND VISUAL REFRESH)
+// ---------------------------------------------------------
 async function syncMasterData() {
     const statusText = document.getElementById("network-text");
     if (!navigator.onLine) { statusText.innerText = "Offline Mode"; document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return; }
@@ -117,7 +132,7 @@ async function syncMasterData() {
     try {
         const response = await fetch(API_URL); const result = await response.json();
         if (result.status === "Success") {
-            window.masterDrawerBalance = result.masterDrawerBalance || 0; // Captures absolute physical cash history
+            window.masterDrawerBalance = result.masterDrawerBalance || 0; 
             
             const transaction = db.transaction(["staff", "menu", "settings", "members", "expense_categories", "promo_codes", "past_shifts"], "readwrite");
             
@@ -130,13 +145,18 @@ async function syncMasterData() {
             const pastShiftsStore = transaction.objectStore("past_shifts"); pastShiftsStore.clear(); if (result.data.pastShifts) result.data.pastShifts.forEach(s => pastShiftsStore.add(s));
 
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
+            
+            // INSTANT VISUAL REFRESH FOR UPDATED STOCK
+            globalMenuData = result.data.menu;
+            renderProductGrid();
+
             statusText.innerText = "Online & Synced"; loadSettingsForCart();
         }
     } catch (error) { statusText.innerText = "Sync Failed"; document.getElementById("network-dot").style.backgroundColor = "#f39c12"; }
 }
 
 // ---------------------------------------------------------
-// THE NEW DECENTRALIZED VOID AFTERMATH ENGINE
+// DECENTRALIZED VOID AFTERMATH ENGINE
 // ---------------------------------------------------------
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite");
@@ -149,7 +169,7 @@ function processVoidApprovals(authStatuses) {
             if (remote) {
                 if (remote.status === "Voided" && order.orderStatus !== "Voided") {
                     order.orderStatus = "Voided"; ordStore.put(order); uiNeedsRefresh = true;
-                    applyVoidAftermath(order); // Tablet runs aftermath automatically if Server says OK!
+                    applyVoidAftermath(order); // Automatically process aftermath when Server approves
                 } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") {
                     order.orderStatus = remote.status; ordStore.put(order); uiNeedsRefresh = true;
                 }
@@ -203,9 +223,10 @@ function applyVoidAftermath(order) {
         fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn } }) });
     }
 }
+
 // ---------------------------------------------------------
-
-
+// MENU & PRODUCT UI
+// ---------------------------------------------------------
 function loadMenuUI() {
     const store = db.transaction(["menu"], "readonly").objectStore("menu");
     store.getAll().onsuccess = (e) => {
@@ -309,6 +330,9 @@ function renderProductGrid() {
     });
 }
 
+// ---------------------------------------------------------
+// CART & CHECKOUT ENGINE
+// ---------------------------------------------------------
 function initTabs() { renderCustomerTabs(); renderCartUI(); }
 
 function renderCustomerTabs() {
@@ -520,6 +544,7 @@ function autoFillPayment(source) {
 
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
 
+// INSTANT PAYMENT & LOCAL STOCK DEDUCTION
 async function finalizePayment(shouldPrint) {
     const cashPaid = Number(document.getElementById("pay-cash").value);
     const qrisPaid = Number(document.getElementById("pay-qris").value);
@@ -541,6 +566,20 @@ async function finalizePayment(shouldPrint) {
         plates: currentOrder.plates, subtotal: totals.baseSubtotal, discounts: totals.totalSavings, promoName: totals.promoName, grandTotal: totals.grandTotal,
         paymentMethod: (cashPaid > 0 && qrisPaid > 0) ? "Split" : (qrisPaid > 0 ? "QRIS" : "Cash"), cashAmount: cashPaid, qrisAmount: qrisPaid
     };
+
+    // INSTANT LOCAL STOCK DEDUCTION
+    const txMenu = db.transaction(["menu"], "readwrite");
+    const storeMenu = txMenu.objectStore("menu");
+    currentOrder.plates.forEach(p => p.items.forEach(cartItem => {
+        storeMenu.get(cartItem.itemId).onsuccess = (ev) => {
+            const menuItem = ev.target.result;
+            if (menuItem && menuItem.trackStock) {
+                menuItem.currentStock = Math.max(0, menuItem.currentStock - cartItem.qty);
+                storeMenu.put(menuItem);
+            }
+        };
+    }));
+    txMenu.oncomplete = () => { renderProductGrid(); }; // Visually gray out "Out of Stock" items immediately
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
     closeReview(); activeOrders.splice(currentOrderIndex, 1);
@@ -604,7 +643,7 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
 function calculateLiveDrawer(callback) {
     let liveDrawer = window.masterDrawerBalance || 0; // The true physical sum from the server
     
-    // We must add any UNSYNCED data from the local tablet to get the exact real-time amount
+    // Add any UNSYNCED data from the local tablet to get the exact real-time amount
     let tx = db.transaction(["orders", "expenses", "cash_drops"], "readonly");
     let ordersReq = tx.objectStore("orders").getAll();
     let expReq = tx.objectStore("expenses").getAll();
@@ -660,9 +699,10 @@ function submitCashDrop() {
         else { alert(`Cash Drop Logged!\nLeft in Drawer: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
     });
 }
+
 // ---------------------------------------------------------
-
-
+// HISTORY & VOIDS
+// ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
 
@@ -746,6 +786,9 @@ async function confirmAdminVoid() {
     };
 }
 
+// ---------------------------------------------------------
+// SHIFT REPORT & LOGOUT
+// ---------------------------------------------------------
 function viewPastShift(shiftId) {
     db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(shiftId).onsuccess = (e) => {
         const s = e.target.result; if(!s) return;
@@ -837,7 +880,6 @@ async function printShiftReport() {
 
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 
-// NEW LOGOUT SEQUENCE (Forces a Cash Drop declaration)
 function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
 async function executeFinalLogout() { 
@@ -862,6 +904,9 @@ async function executeFinalLogout() {
     localStorage.removeItem("pos_active_session"); window.location.reload(); 
 }
 
+// ---------------------------------------------------------
+// EXPENSES & SETTINGS
+// ---------------------------------------------------------
 function openExpenseModal() {
     document.getElementById("expense-modal").classList.remove("hidden");
     const list = document.getElementById("expense-category-list"); list.innerHTML = "";
@@ -886,6 +931,9 @@ function openSettings() {
 }
 function closeSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
 
+// ---------------------------------------------------------
+// BACKGROUND SYNC ENGINE
+// ---------------------------------------------------------
 async function runBackgroundSync() {
     if (!navigator.onLine) return; 
     let tx = db.transaction(["orders"], "readonly"); let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
@@ -902,7 +950,6 @@ async function runBackgroundSync() {
         }
     }
 
-    // SYNC CASH DROPS
     tx = db.transaction(["cash_drops"], "readonly"); items = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
     for (const drop of items) {
         if (drop.syncStatus === "Pending") {
