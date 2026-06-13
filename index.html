@@ -142,6 +142,7 @@
             <input type="password" id="cashier-pin" placeholder="****" inputmode="numeric">
             <button onclick="attemptLogin()">Log In / Open Shift</button>
             <button id="login-sync-btn" class="secondary-btn" onclick="loginScreenSync()">🔄 Sync Database</button>
+            <p id="login-sync-status" style="color: #7f8c8d; font-size: 14px; margin-top: 10px; font-weight: bold;"></p>
             <button id="top-install-btn" class="secondary-btn hidden" style="background:#2ecc71;">📲 Install App</button>
         </div>
     </div>
@@ -185,6 +186,7 @@
         </div>
     </div>
 
+    <!-- MODALS -->
     <div id="add-table-modal" class="modal-overlay hidden">
         <div class="modal-content modal-standard">
             <h2 style="margin-top:0;">📝 New Table Order</h2>
