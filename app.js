@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 17; 
+const DB_VERSION = 18; 
 let db;
 
 let tablePrefix = "A"; 
@@ -60,6 +60,7 @@ function initDB() {
             if (!db.objectStoreNames.contains("past_shifts")) db.createObjectStore("past_shifts", { keyPath: "shiftId" }); 
             if (!db.objectStoreNames.contains("active_shifts")) db.createObjectStore("active_shifts", { keyPath: "pin" }); 
             if (!db.objectStoreNames.contains("cash_drops")) db.createObjectStore("cash_drops", { keyPath: "dropId" }); 
+            if (!db.objectStoreNames.contains("local_shift_history")) db.createObjectStore("local_shift_history", { keyPath: "shiftId" }); 
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
         request.onerror = (event) => { reject(event.target.errorCode); };
@@ -714,7 +715,7 @@ function submitCashDrop() {
         db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
         closeCashDrop(); runBackgroundSync();
         
-        if (isLoggingOut) { executeFinalLogout(); } 
+        if (isLoggingOut) { executeFinalLogout(leftInDrawer); } 
         else { alert(`Cash Drop Logged!\nLeft in Drawer: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
     });
 }
@@ -753,9 +754,9 @@ function renderHistoryList(type) {
             });
         };
     } else if (type === 'shifts') {
-        db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").getAll().onsuccess = (e) => {
+        db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").getAll().onsuccess = (e) => {
             const shifts = e.target.result.reverse();
-            if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">No past shifts synced yet.</div>`;
+            if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">No past shifts recorded on this device yet.</div>`;
             shifts.forEach(s => {
                 container.innerHTML += `
                     <div class="history-row">
@@ -806,31 +807,48 @@ async function confirmAdminVoid() {
 }
 
 // ---------------------------------------------------------
-// STRICT LOGOUT SEQUENCE (The Zeroing Fix)
+// STRICT LOGOUT SEQUENCE & SHIFT REPORTING
 // ---------------------------------------------------------
 function viewPastShift(shiftId) {
-    db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(shiftId).onsuccess = (e) => {
-        const s = e.target.result; if(!s) return;
-        
-        document.getElementById("shift-customers").innerText = s.totalCustomers; document.getElementById("shift-plates").innerText = s.totalPlates;
-        document.getElementById("shift-omset").innerText = `Rp ${Number(String(s.totalOmset).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
-        document.getElementById("shift-cash").innerText = `Rp ${Number(String(s.totalCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
-        document.getElementById("shift-qris").innerText = `Rp ${Number(String(s.totalQris).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
-        document.getElementById("shift-expenses").innerText = `Rp ${Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
-        document.getElementById("shift-net").innerText = `Rp ${Number(String(s.netCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
-        
-        let foodHtml = s.foodSummaryStr.replace(/\n/g, '<br>'); document.getElementById("shift-food-list").innerHTML = `<div style="font-size:12px;">${foodHtml}</div>`;
-        
-        window.currentShiftData = {
-            isPast: true, shiftId: s.shiftId, cashier: s.cashier, totalCustomers: s.totalCustomers, totalPlates: s.totalPlates,
-            totalOmset: Number(String(s.totalOmset).replace(/[^\d.-]/g, '')), totalCash: Number(String(s.totalCash).replace(/[^\d.-]/g, '')),
-            totalQris: Number(String(s.totalQris).replace(/[^\d.-]/g, '')), totalExpenses: Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')),
-            net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: s.foodSummaryStr
-        };
-
-        document.getElementById("shift-modal-active-buttons").style.display = "none"; document.getElementById("shift-modal-past-buttons").style.display = "flex";
-        document.getElementById("shift-report-modal").classList.remove("hidden");
+    db.transaction(["past_shifts", "local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
+        let s = e.target.result; 
+        if(!s) {
+            // Fallback to past_shifts if it synced from another device
+            db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(shiftId).onsuccess = (ev) => {
+                s = ev.target.result;
+                if(!s) return;
+                populateShiftModal(s, true);
+            };
+        } else {
+            populateShiftModal(s, true);
+        }
     };
+}
+
+function populateShiftModal(s, isPast) {
+    document.getElementById("shift-customers").innerText = s.totalCustomers; document.getElementById("shift-plates").innerText = s.totalPlates;
+    document.getElementById("shift-omset").innerText = `Rp ${Number(String(s.totalOmset).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
+    document.getElementById("shift-cash").innerText = `Rp ${Number(String(s.totalCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
+    document.getElementById("shift-qris").innerText = `Rp ${Number(String(s.totalQris).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
+    document.getElementById("shift-expenses").innerText = `Rp ${Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
+    document.getElementById("shift-net").innerText = `Rp ${Number(String(s.netCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
+    
+    let foodStr = typeof s.foodSummary === 'string' ? s.foodSummary : (s.foodSummaryStr || "");
+    if (!foodStr && typeof s.foodSummary === 'object') {
+        for (const [name, qty] of Object.entries(s.foodSummary)) { foodStr += ` • ${qty}x ${name}\n`; }
+    }
+    document.getElementById("shift-food-list").innerHTML = `<div style="font-size:12px;">${foodStr.replace(/\n/g, '<br>')}</div>`;
+    
+    window.currentShiftData = {
+        isPast: isPast, shiftId: s.shiftId, cashier: s.cashier, totalCustomers: s.totalCustomers, totalPlates: s.totalPlates,
+        totalOmset: Number(String(s.totalOmset).replace(/[^\d.-]/g, '')), totalCash: Number(String(s.totalCash).replace(/[^\d.-]/g, '')),
+        totalQris: Number(String(s.totalQris).replace(/[^\d.-]/g, '')), totalExpenses: Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')),
+        net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: foodStr
+    };
+
+    document.getElementById("shift-modal-active-buttons").style.display = isPast ? "none" : "flex"; 
+    document.getElementById("shift-modal-past-buttons").style.display = isPast ? "flex" : "none";
+    document.getElementById("shift-report-modal").classList.remove("hidden");
 }
 
 function openShiftReport() {
@@ -850,18 +868,8 @@ function openShiftReport() {
             validExp.forEach(exp => { totalExpenses += exp.amount; });
 
             calculateLiveDrawer((liveDrawer) => {
-                document.getElementById("shift-customers").innerText = totalCustomers; document.getElementById("shift-plates").innerText = totalPlates;
-                document.getElementById("shift-omset").innerText = `Rp ${totalOmset.toLocaleString('id-ID')}`; document.getElementById("shift-cash").innerText = `Rp ${totalCash.toLocaleString('id-ID')}`;
-                document.getElementById("shift-qris").innerText = `Rp ${totalQris.toLocaleString('id-ID')}`; document.getElementById("shift-expenses").innerText = `Rp ${totalExpenses.toLocaleString('id-ID')}`;
-                document.getElementById("shift-net").innerText = `Rp ${liveDrawer.toLocaleString('id-ID')}`;
-
-                let foodHtml = ""; for (const [name, qty] of Object.entries(foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px dashed #ddd; padding:4px 0;"><span>${name}</span><strong>${qty}x</strong></div>`; }
-                if(foodHtml === "") foodHtml = "No food sold yet."; document.getElementById("shift-food-list").innerHTML = foodHtml;
-                
-                document.getElementById("shift-modal-active-buttons").style.display = "flex"; document.getElementById("shift-modal-past-buttons").style.display = "none";
-                document.getElementById("shift-report-modal").classList.remove("hidden");
-                
-                window.currentShiftData = { isPast: false, totalCustomers, totalPlates, totalOmset, totalCash, totalQris, totalExpenses, net: liveDrawer, foodSummary };
+                let s = { shiftId: currentShiftId, cashier: currentCashier, totalCustomers: totalCustomers, totalPlates: totalPlates, totalOmset: totalOmset, totalCash: totalCash, totalQris: totalQris, totalExpenses: totalExpenses, netCash: liveDrawer, foodSummary: foodSummary };
+                populateShiftModal(s, false);
             });
         };
     };
@@ -901,48 +909,36 @@ function closeShiftReport() { document.getElementById("shift-report-modal").clas
 
 function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
-async function executeFinalLogout() { 
+// DECOUPLED FROM NETWORK - INSTANT WIPE & RELOAD
+function executeFinalLogout(netCash) { 
     const data = window.currentShiftData;
     const shiftPayload = {
         shiftId: currentShiftId, timestamp: new Date().toISOString(), cashier: currentCashier, loginTime: currentLoginTime, logoutTime: new Date().toISOString(), 
-        totalCustomers: data.totalCustomers, totalPlates: data.totalPlates, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalExpenses: data.totalExpenses, netCash: data.net,
+        totalCustomers: data.totalCustomers, totalPlates: data.totalPlates, totalOmset: data.totalOmset, totalCash: data.totalCash, totalQris: data.totalQris, totalExpenses: data.totalExpenses, netCash: netCash,
         foodSummary: data.foodSummary, syncStatus: "Pending"
     };
 
-    // STRICT AWAIT WITH PUT: This guarantees the shift is wiped from the tablet
-    await new Promise((resolve) => {
-        const tx = db.transaction(["shift_reports", "active_shifts"], "readwrite");
-        tx.objectStore("shift_reports").put(shiftPayload); // <--- Prevents DB crash
-        tx.objectStore("active_shifts").delete(currentPin); 
-        tx.oncomplete = resolve;
-        tx.onerror = resolve; 
-    });
+    // 1. INSTANT LOCAL SAVE: No waiting, no promises hanging
+    const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
+    tx.objectStore("local_shift_history").add(shiftPayload);
+    tx.objectStore("shift_reports").add(shiftPayload);
+    tx.objectStore("active_shifts").delete(currentPin); 
 
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
     localStorage.removeItem("pos_active_session"); 
 
-    // DECOUPLED FETCH: Attempt to send it to Google, but abort if it takes longer than 2 seconds!
+    // 2. NETWORK PUSH (SILENT): Do not block the UI waiting for Google!
     if (navigator.onLine) {
-        document.getElementById("network-text").innerText = `Sending Report...`;
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2000); 
-            
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }), signal: controller.signal });
-            clearTimeout(timeoutId);
-            
-            if ((await r.json()).status === "Success") { 
-                await new Promise((resolve) => {
-                    const txSync = db.transaction(["shift_reports"], "readwrite");
-                    txSync.objectStore("shift_reports").delete(shiftPayload.shiftId);
-                    txSync.oncomplete = resolve;
-                    txSync.onerror = resolve;
-                });
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) })
+        .then(res => res.json())
+        .then(json => {
+            if (json.status === "Success") {
+                db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId);
             }
-        } catch(e) { console.log("Timeout: Saved locally."); }
+        }).catch(e => console.log("Offline logout, saved locally."));
     }
     
-    // Completely wipe screen immediately!
+    // 3. INSTANT WIPE & RELOAD
     document.getElementById("pos-screen").classList.add("hidden");
     document.getElementById("login-screen").classList.remove("hidden");
     window.location.reload(); 
@@ -969,9 +965,7 @@ function saveExpense() {
     closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Expense Recorded!"); runBackgroundSync();
 }
 
-function openSettings() {
-    document.getElementById("settings-modal").classList.remove("hidden");
-}
+function openSettings() { document.getElementById("settings-modal").classList.remove("hidden"); }
 function closeSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
 
 // ---------------------------------------------------------
