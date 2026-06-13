@@ -14,6 +14,7 @@
         .login-box { background: white; padding: 40px; border-radius: 12px; text-align: center; color: #333; box-shadow: 0 10px 25px rgba(0,0,0,0.2); width: 100%; max-width: 400px; }
         .login-box input { font-size: 24px; padding: 10px; text-align: center; width: 100%; margin-bottom: 20px; border: 2px solid #ddd; border-radius: 8px; }
         .login-box button { background: #27ae60; color: white; border: none; padding: 15px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; }
+        .login-box .secondary-btn { background: #34495e; margin-top: 10px; font-size: 16px; padding: 12px 20px; }
 
         #pos-screen { display: flex; flex-direction: column; height: 100vh; }
         #top-bar { background: #2c3e50; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
@@ -140,6 +141,8 @@
             <p>Enter Cashier PIN</p>
             <input type="password" id="cashier-pin" placeholder="****" inputmode="numeric">
             <button onclick="attemptLogin()">Log In / Open Shift</button>
+            <button id="login-sync-btn" class="secondary-btn" onclick="loginScreenSync()">🔄 Sync Database</button>
+            <button id="top-install-btn" class="secondary-btn hidden" style="background:#2ecc71;">📲 Install App</button>
         </div>
     </div>
 
@@ -148,8 +151,7 @@
             <div><strong>Shift:</strong> <span id="display-cashier">---</span> | <strong>Prefix:</strong> <span id="display-prefix">A</span></div>
             <div class="status-indicator">
                 <span class="dot-online" id="network-dot"></span><span id="network-text">Initializing...</span>
-                <button id="top-sync-btn" class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="syncMasterData()">🔄 Sync</button>
-                <button id="top-install-btn" class="btn-top hidden" style="background:#2ecc71; border-color:#2ecc71;">📲 Install</button>
+                <button class="btn-top" style="background:#3498db; border-color:#3498db;" onclick="syncMasterData()">🔄 Sync</button>
                 <button class="btn-top" style="background:#16a085; border-color:#16a085;" onclick="openCashDrop(false)">🏦 Cash Drop</button>
                 <button class="btn-top" style="background:#8e44ad; border-color:#8e44ad;" onclick="openHistoryModal()">📋 History</button>
                 <button class="btn-top" style="background:#e67e22; border-color:#e67e22;" onclick="openExpenseModal()">💸 Expenses</button>
@@ -183,7 +185,6 @@
         </div>
     </div>
 
-    <!-- MODALS -->
     <div id="add-table-modal" class="modal-overlay hidden">
         <div class="modal-content modal-standard">
             <h2 style="margin-top:0;">📝 New Table Order</h2>
