@@ -125,10 +125,26 @@ function lockScreen() { localStorage.removeItem("pos_active_session"); window.lo
 // ---------------------------------------------------------
 // MASTER DATA SYNC (AND VISUAL REFRESH)
 // ---------------------------------------------------------
+async function loginScreenSync() {
+    const btn = document.getElementById("login-sync-btn");
+    const originalText = btn.innerText;
+    btn.innerText = "⏳ Syncing...";
+    btn.disabled = true;
+    
+    await syncMasterData();
+    
+    btn.innerText = "✅ Database Synced!";
+    setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 3000);
+}
+
 async function syncMasterData() {
     const statusText = document.getElementById("network-text");
-    if (!navigator.onLine) { statusText.innerText = "Offline Mode"; document.getElementById("network-dot").style.backgroundColor = "#e74c3c"; return; }
-    statusText.innerText = "Syncing...";
+    if (!navigator.onLine) { 
+        if(statusText) statusText.innerText = "Offline Mode"; 
+        const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#e74c3c"; 
+        return; 
+    }
+    if(statusText) statusText.innerText = "Syncing...";
     try {
         const response = await fetch(API_URL); const result = await response.json();
         if (result.status === "Success") {
@@ -147,13 +163,13 @@ async function syncMasterData() {
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
             
             globalMenuData = result.data.menu;
-            renderProductGrid();
+            if(!document.getElementById("pos-screen").classList.contains("hidden")) { renderProductGrid(); }
 
-            statusText.innerText = "Online & Synced"; loadSettingsForCart();
+            if(statusText) statusText.innerText = "Online & Synced"; loadSettingsForCart();
         }
     } catch (error) { 
-        statusText.innerText = "Online (Local)"; 
-        document.getElementById("network-dot").style.backgroundColor = "#f39c12"; 
+        if(statusText) { statusText.innerText = "Online (Local)"; }
+        const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#f39c12"; 
     }
 }
 
@@ -211,7 +227,7 @@ function applyVoidAftermath(order) {
             }
         };
     });
-    tx.oncomplete = () => { renderProductGrid(); };
+    tx.oncomplete = () => { if(!document.getElementById("pos-screen").classList.contains("hidden")) renderProductGrid(); };
 
     if (order.customerPhone && order.customerPhone !== "Walk-in" && order.customerPhone !== "-") {
         memberStore.get(order.customerPhone).onsuccess = (e) => {
@@ -881,6 +897,7 @@ function closeShiftReport() { document.getElementById("shift-report-modal").clas
 
 function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
+// DECOUPLED FROM NETWORK - INSTANT WIPE & RELOAD
 async function executeFinalLogout() { 
     const data = window.currentShiftData;
     const shiftPayload = {
@@ -901,21 +918,9 @@ async function executeFinalLogout() {
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
     localStorage.removeItem("pos_active_session"); 
 
-    if (navigator.onLine) {
-        document.getElementById("network-text").innerText = `Sending Report...`;
-        try {
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
-            if ((await r.json()).status === "Success") { 
-                await new Promise((resolve) => {
-                    const txSync = db.transaction(["shift_reports"], "readwrite");
-                    txSync.objectStore("shift_reports").delete(shiftPayload.shiftId);
-                    txSync.oncomplete = resolve;
-                });
-            }
-        } catch(e) { console.log("Offline logout, saved locally."); }
-    }
-    
-    // Now it is perfectly safe to refresh.
+    // Hide the POS and reload immediately. Let background sync do the heavy lifting later.
+    document.getElementById("pos-screen").classList.add("hidden");
+    document.getElementById("login-screen").classList.remove("hidden");
     window.location.reload(); 
 }
 
