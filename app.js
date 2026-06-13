@@ -127,24 +127,25 @@ function lockScreen() { localStorage.removeItem("pos_active_session"); window.lo
 // ---------------------------------------------------------
 async function loginScreenSync() {
     const btn = document.getElementById("login-sync-btn");
-    const originalText = btn.innerText;
-    btn.innerText = "⏳ Syncing...";
     btn.disabled = true;
-    
     await syncMasterData();
-    
-    btn.innerText = "✅ Database Synced!";
-    setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 3000);
+    btn.disabled = false;
 }
 
 async function syncMasterData() {
     const statusText = document.getElementById("network-text");
+    const loginStatus = document.getElementById("login-sync-status");
+    
     if (!navigator.onLine) { 
         if(statusText) statusText.innerText = "Offline Mode"; 
+        if(loginStatus) loginStatus.innerText = "Status: Offline Mode ❌"; 
         const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#e74c3c"; 
         return; 
     }
+    
     if(statusText) statusText.innerText = "Syncing...";
+    if(loginStatus) loginStatus.innerText = "Status: Syncing with Server... ⏳"; 
+    
     try {
         const response = await fetch(API_URL); const result = await response.json();
         if (result.status === "Success") {
@@ -165,10 +166,13 @@ async function syncMasterData() {
             globalMenuData = result.data.menu;
             if(!document.getElementById("pos-screen").classList.contains("hidden")) { renderProductGrid(); }
 
-            if(statusText) statusText.innerText = "Online & Synced"; loadSettingsForCart();
+            if(statusText) statusText.innerText = "Online & Synced"; 
+            if(loginStatus) loginStatus.innerText = "Status: Database Synced ✅"; 
+            loadSettingsForCart();
         }
     } catch (error) { 
-        if(statusText) { statusText.innerText = "Online (Local)"; }
+        if(statusText) statusText.innerText = "Online (Local)"; 
+        if(loginStatus) loginStatus.innerText = "Status: Sync Failed ⚠️"; 
         const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#f39c12"; 
     }
 }
@@ -897,7 +901,6 @@ function closeShiftReport() { document.getElementById("shift-report-modal").clas
 
 function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
-// DECOUPLED FROM NETWORK - INSTANT WIPE & RELOAD
 async function executeFinalLogout() { 
     const data = window.currentShiftData;
     const shiftPayload = {
@@ -906,19 +909,40 @@ async function executeFinalLogout() {
         foodSummary: data.foodSummary, syncStatus: "Pending"
     };
 
-    // STRICT AWAIT: Freeze system until shift is 100% erased locally
+    // STRICT AWAIT WITH PUT: This guarantees the shift is wiped from the tablet
     await new Promise((resolve) => {
         const tx = db.transaction(["shift_reports", "active_shifts"], "readwrite");
-        tx.objectStore("shift_reports").add(shiftPayload);
+        tx.objectStore("shift_reports").put(shiftPayload); // <--- Prevents DB crash
         tx.objectStore("active_shifts").delete(currentPin); 
         tx.oncomplete = resolve;
-        tx.onerror = resolve; // Continue to wipe cache even if DB fails
+        tx.onerror = resolve; 
     });
 
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
     localStorage.removeItem("pos_active_session"); 
 
-    // Hide the POS and reload immediately. Let background sync do the heavy lifting later.
+    // DECOUPLED FETCH: Attempt to send it to Google, but abort if it takes longer than 2 seconds!
+    if (navigator.onLine) {
+        document.getElementById("network-text").innerText = `Sending Report...`;
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000); 
+            
+            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }), signal: controller.signal });
+            clearTimeout(timeoutId);
+            
+            if ((await r.json()).status === "Success") { 
+                await new Promise((resolve) => {
+                    const txSync = db.transaction(["shift_reports"], "readwrite");
+                    txSync.objectStore("shift_reports").delete(shiftPayload.shiftId);
+                    txSync.oncomplete = resolve;
+                    txSync.onerror = resolve;
+                });
+            }
+        } catch(e) { console.log("Timeout: Saved locally."); }
+    }
+    
+    // Completely wipe screen immediately!
     document.getElementById("pos-screen").classList.add("hidden");
     document.getElementById("login-screen").classList.remove("hidden");
     window.location.reload(); 
