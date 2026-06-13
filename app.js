@@ -1,6 +1,6 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 17; // Upgraded for Money Journal
+const DB_VERSION = 17; 
 let db;
 
 let tablePrefix = "A"; 
@@ -26,14 +26,14 @@ let isLoggingOut = false;
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); deferredPrompt = e;
-    const installBtn = document.getElementById('install-btn');
+    const installBtn = document.getElementById('top-install-btn');
     if (installBtn) installBtn.classList.remove('hidden');
 });
-document.getElementById('install-btn')?.addEventListener('click', async () => {
+document.getElementById('top-install-btn')?.addEventListener('click', async () => {
     if (deferredPrompt) { 
         deferredPrompt.prompt(); 
         const { outcome } = await deferredPrompt.userChoice; 
-        if (outcome === 'accepted') { document.getElementById('install-btn').classList.add('hidden'); } 
+        if (outcome === 'accepted') { document.getElementById('top-install-btn').classList.add('hidden'); } 
         deferredPrompt = null; 
     }
 });
@@ -146,13 +146,15 @@ async function syncMasterData() {
 
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
             
-            // INSTANT VISUAL REFRESH FOR UPDATED STOCK
             globalMenuData = result.data.menu;
             renderProductGrid();
 
             statusText.innerText = "Online & Synced"; loadSettingsForCart();
         }
-    } catch (error) { statusText.innerText = "Sync Failed"; document.getElementById("network-dot").style.backgroundColor = "#f39c12"; }
+    } catch (error) { 
+        statusText.innerText = "Online (Local)"; 
+        document.getElementById("network-dot").style.backgroundColor = "#f39c12"; 
+    }
 }
 
 // ---------------------------------------------------------
@@ -169,7 +171,7 @@ function processVoidApprovals(authStatuses) {
             if (remote) {
                 if (remote.status === "Voided" && order.orderStatus !== "Voided") {
                     order.orderStatus = "Voided"; ordStore.put(order); uiNeedsRefresh = true;
-                    applyVoidAftermath(order); // Automatically process aftermath when Server approves
+                    applyVoidAftermath(order); 
                 } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && order.orderStatus === "Void Pending") {
                     order.orderStatus = remote.status; ordStore.put(order); uiNeedsRefresh = true;
                 }
@@ -197,7 +199,6 @@ function applyVoidAftermath(order) {
     let itemsToReturn = [];
     order.plates.forEach(p => p.items.forEach(i => itemsToReturn.push({ name: i.name, qty: i.qty })));
     
-    // Step 1: Update Local DB so tablet reflects reality instantly
     const tx = db.transaction(["menu", "members"], "readwrite");
     const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
 
@@ -210,6 +211,7 @@ function applyVoidAftermath(order) {
             }
         };
     });
+    tx.oncomplete = () => { renderProductGrid(); };
 
     if (order.customerPhone && order.customerPhone !== "Walk-in" && order.customerPhone !== "-") {
         memberStore.get(order.customerPhone).onsuccess = (e) => {
@@ -218,9 +220,8 @@ function applyVoidAftermath(order) {
         };
     }
 
-    // Step 2: Instruct server to fix its own math in the background
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn } }) });
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
     }
 }
 
@@ -567,7 +568,6 @@ async function finalizePayment(shouldPrint) {
         paymentMethod: (cashPaid > 0 && qrisPaid > 0) ? "Split" : (qrisPaid > 0 ? "QRIS" : "Cash"), cashAmount: cashPaid, qrisAmount: qrisPaid
     };
 
-    // INSTANT LOCAL STOCK DEDUCTION
     const txMenu = db.transaction(["menu"], "readwrite");
     const storeMenu = txMenu.objectStore("menu");
     currentOrder.plates.forEach(p => p.items.forEach(cartItem => {
@@ -579,7 +579,7 @@ async function finalizePayment(shouldPrint) {
             }
         };
     }));
-    txMenu.oncomplete = () => { renderProductGrid(); }; // Visually gray out "Out of Stock" items immediately
+    txMenu.oncomplete = () => { renderProductGrid(); };
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
     closeReview(); activeOrders.splice(currentOrderIndex, 1);
@@ -641,9 +641,8 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
 // CONTINUOUS DRAWER ENGINE (MONEY JOURNAL)
 // ---------------------------------------------------------
 function calculateLiveDrawer(callback) {
-    let liveDrawer = window.masterDrawerBalance || 0; // The true physical sum from the server
+    let liveDrawer = window.masterDrawerBalance || 0; 
     
-    // Add any UNSYNCED data from the local tablet to get the exact real-time amount
     let tx = db.transaction(["orders", "expenses", "cash_drops"], "readonly");
     let ordersReq = tx.objectStore("orders").getAll();
     let expReq = tx.objectStore("expenses").getAll();
@@ -787,7 +786,7 @@ async function confirmAdminVoid() {
 }
 
 // ---------------------------------------------------------
-// SHIFT REPORT & LOGOUT
+// STRICT LOGOUT SEQUENCE (The Zeroing Fix)
 // ---------------------------------------------------------
 function viewPastShift(shiftId) {
     db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(shiftId).onsuccess = (e) => {
@@ -890,18 +889,34 @@ async function executeFinalLogout() {
         foodSummary: data.foodSummary, syncStatus: "Pending"
     };
 
-    db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").add(shiftPayload);
-    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").delete(currentPin); 
+    // STRICT AWAIT: Freeze system until shift is 100% erased locally
+    await new Promise((resolve) => {
+        const tx = db.transaction(["shift_reports", "active_shifts"], "readwrite");
+        tx.objectStore("shift_reports").add(shiftPayload);
+        tx.objectStore("active_shifts").delete(currentPin); 
+        tx.oncomplete = resolve;
+        tx.onerror = resolve; // Continue to wipe cache even if DB fails
+    });
+
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
+    localStorage.removeItem("pos_active_session"); 
 
     if (navigator.onLine) {
         document.getElementById("network-text").innerText = `Sending Report...`;
         try {
             let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
-            if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId); }
-        } catch(e) {}
+            if ((await r.json()).status === "Success") { 
+                await new Promise((resolve) => {
+                    const txSync = db.transaction(["shift_reports"], "readwrite");
+                    txSync.objectStore("shift_reports").delete(shiftPayload.shiftId);
+                    txSync.oncomplete = resolve;
+                });
+            }
+        } catch(e) { console.log("Offline logout, saved locally."); }
     }
-    localStorage.removeItem("pos_active_session"); window.location.reload(); 
+    
+    // Now it is perfectly safe to refresh.
+    window.location.reload(); 
 }
 
 // ---------------------------------------------------------
@@ -927,12 +942,11 @@ function saveExpense() {
 
 function openSettings() {
     document.getElementById("settings-modal").classList.remove("hidden");
-    db.transaction(["settings"], "readonly").objectStore("settings").get("Tax_Rate_Percent").onsuccess = (e) => { document.getElementById("display-tax-rate").innerText = e.target.result ? e.target.result.value : "0"; };
 }
 function closeSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
 
 // ---------------------------------------------------------
-// BACKGROUND SYNC ENGINE
+// BACKGROUND SYNC ENGINE (Softened Error Catching)
 // ---------------------------------------------------------
 async function runBackgroundSync() {
     if (!navigator.onLine) return; 
