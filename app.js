@@ -713,10 +713,14 @@ function submitCashDrop() {
         };
         
         db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
-        closeCashDrop(); runBackgroundSync();
-        
-        if (isLoggingOut) { executeFinalLogout(leftInDrawer); } 
-        else { alert(`Cash Drop Logged!\nLeft in Drawer: Rp ${leftInDrawer.toLocaleString('id-ID')}`); }
+        closeCashDrop(); 
+
+        if (isLoggingOut) { 
+            executeFinalLogout(leftInDrawer); 
+        } else { 
+            runBackgroundSync();
+            alert(`Cash Drop Logged!\nLeft in Drawer: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+        }
     });
 }
 
@@ -908,8 +912,10 @@ function initiateLogoutSequence() {
     openCashDrop(true); 
 }
 
-// DECOUPLED FROM NETWORK - INSTANT WIPE & RELOAD
-function executeFinalLogout(netCash) { 
+// ---------------------------------------------------------
+// ASYNC WIPE LOGIC (Guaranteed Execution before Page Load)
+// ---------------------------------------------------------
+async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData;
     const shiftPayload = {
         shiftId: currentShiftId, timestamp: new Date().toISOString(), cashier: currentCashier, loginTime: currentLoginTime, logoutTime: new Date().toISOString(), 
@@ -917,30 +923,35 @@ function executeFinalLogout(netCash) {
         foodSummary: data.foodSummary, syncStatus: "Pending"
     };
 
-    // 1. INSTANT LOCAL SAVE: No waiting, no promises hanging
+    // 1. INSTANT LOCAL SAVE: Uses PUT to avoid duplicate errors, completely freezing UI until done
     const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
-    tx.objectStore("local_shift_history").add(shiftPayload);
-    tx.objectStore("shift_reports").add(shiftPayload);
+    tx.objectStore("local_shift_history").put(shiftPayload);
+    tx.objectStore("shift_reports").put(shiftPayload);
     tx.objectStore("active_shifts").delete(currentPin); 
 
     localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
     localStorage.removeItem("pos_active_session"); 
 
-    // 2. NETWORK PUSH (SILENT): Do not block the UI waiting for Google!
+    // 2. NETWORK PUSH WITH AWAIT: Let Google sync quickly, but do not trap the user.
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) })
-        .then(res => res.json())
-        .then(json => {
-            if (json.status === "Success") {
+        const netText = document.getElementById("network-text");
+        if(netText) netText.innerText = `Sending Report...`;
+        try {
+            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
+            if ((await r.json()).status === "Success") {
                 db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId);
             }
-        }).catch(e => console.log("Offline logout, saved locally."));
+        } catch(e) {
+            console.log("Offline logout, saved locally.");
+        }
     }
     
-    // 3. INSTANT WIPE & RELOAD
-    document.getElementById("pos-screen").classList.add("hidden");
-    document.getElementById("login-screen").classList.remove("hidden");
-    window.location.reload(); 
+    // 3. WIPE & RELOAD: 500ms delay ensures IndexedDB has safely written to memory before browser kills it!
+    setTimeout(() => {
+        document.getElementById("pos-screen").classList.add("hidden");
+        document.getElementById("login-screen").classList.remove("hidden");
+        window.location.reload(); 
+    }, 500);
 }
 
 // ---------------------------------------------------------
