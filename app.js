@@ -813,7 +813,6 @@ function viewPastShift(shiftId) {
     db.transaction(["past_shifts", "local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
         let s = e.target.result; 
         if(!s) {
-            // Fallback to past_shifts if it synced from another device
             db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(shiftId).onsuccess = (ev) => {
                 s = ev.target.result;
                 if(!s) return;
@@ -826,7 +825,8 @@ function viewPastShift(shiftId) {
 }
 
 function populateShiftModal(s, isPast) {
-    document.getElementById("shift-customers").innerText = s.totalCustomers; document.getElementById("shift-plates").innerText = s.totalPlates;
+    document.getElementById("shift-customers").innerText = s.totalCustomers; 
+    document.getElementById("shift-plates").innerText = s.totalPlates;
     document.getElementById("shift-omset").innerText = `Rp ${Number(String(s.totalOmset).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
     document.getElementById("shift-cash").innerText = `Rp ${Number(String(s.totalCash).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
     document.getElementById("shift-qris").innerText = `Rp ${Number(String(s.totalQris).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
@@ -843,7 +843,7 @@ function populateShiftModal(s, isPast) {
         isPast: isPast, shiftId: s.shiftId, cashier: s.cashier, totalCustomers: s.totalCustomers, totalPlates: s.totalPlates,
         totalOmset: Number(String(s.totalOmset).replace(/[^\d.-]/g, '')), totalCash: Number(String(s.totalCash).replace(/[^\d.-]/g, '')),
         totalQris: Number(String(s.totalQris).replace(/[^\d.-]/g, '')), totalExpenses: Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')),
-        net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: foodStr
+        net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodSummary: s.foodSummary, foodStr: foodStr
     };
 
     document.getElementById("shift-modal-active-buttons").style.display = isPast ? "none" : "flex"; 
@@ -881,10 +881,6 @@ async function printShiftReport() {
     const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
     const data = window.currentShiftData;
 
-    let foodHtml = "";
-    if (data.isPast) { foodHtml = `<div style="font-size:11px; text-align:left; white-space:pre-wrap;">${data.foodStr}</div>`; } 
-    else { for (const [name, qty] of Object.entries(data.foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>${name}</span><span>${qty}x</span></div>`; } }
-
     const printShiftId = data.isPast ? data.shiftId : currentShiftId; const printCashier = data.isPast ? data.cashier : currentCashier;
 
     printArea.innerHTML = `
@@ -899,7 +895,7 @@ async function printShiftReport() {
         <div style="display:flex; justify-content:space-between; margin-top:5px; font-weight:bold;"><span>Cash Received:</span><span>Rp ${data.totalCash.toLocaleString('id-ID')}</span></div>
         <div style="display:flex; justify-content:space-between; color:#e74c3c;"><span>Expenses Paid:</span><span>-Rp ${data.totalExpenses.toLocaleString('id-ID')}</span></div>
         <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px; margin-top:5px; border-top: 1px solid #000; padding-top: 5px;"><span>CASH IN DRAWER:</span><span>Rp ${data.net.toLocaleString('id-ID')}</span></div>
-        <div style="border-bottom:1px dashed #000; margin-top:15px; margin-bottom:5px; font-weight:bold;">ITEMS SOLD</div>${foodHtml}
+        <div style="border-bottom:1px dashed #000; margin-top:15px; margin-bottom:5px; font-weight:bold;">ITEMS SOLD</div><div style="font-size:11px; text-align:left; white-space:pre-wrap;">${data.foodStr}</div>
         <div style="text-align:center; margin-top:20px; font-weight:bold; font-size: 12px;">END OF REPORT</div>
     `;
     window.print();
@@ -907,7 +903,10 @@ async function printShiftReport() {
 
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 
-function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
+function initiateLogoutSequence() { 
+    document.getElementById("shift-report-modal").classList.add("hidden"); 
+    openCashDrop(true); 
+}
 
 // DECOUPLED FROM NETWORK - INSTANT WIPE & RELOAD
 function executeFinalLogout(netCash) { 
@@ -971,49 +970,59 @@ function closeSettings() { document.getElementById("settings-modal").classList.a
 // ---------------------------------------------------------
 // BACKGROUND SYNC ENGINE (Softened Error Catching)
 // ---------------------------------------------------------
+let isSyncing = false; 
+
 async function runBackgroundSync() {
-    if (!navigator.onLine) return; 
-    let tx = db.transaction(["orders"], "readonly"); let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
-    for (const order of items) {
-        if (order.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) {}
+    if (!navigator.onLine || isSyncing) return; 
+    isSyncing = true;
+    try {
+        let tx = db.transaction(["orders", "cash_drops", "shift_reports", "expenses", "void_requests", "unsynced_members"], "readonly");
+        
+        let orders = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
+        for (const order of orders) {
+            if (order.syncStatus === "Pending") {
+                order.syncStatus = "Syncing"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order);
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } else { order.syncStatus = "Pending"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) { order.syncStatus = "Pending"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); }
+            }
         }
-    }
 
-    tx = db.transaction(["expenses"], "readonly"); items = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
-    for (const exp of items) {
-        if (exp.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
+        let expenses = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
+        for (const exp of expenses) {
+            if (exp.syncStatus === "Pending") {
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
+            }
         }
-    }
 
-    tx = db.transaction(["cash_drops"], "readonly"); items = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
-    for (const drop of items) {
-        if (drop.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
+        let drops = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
+        for (const drop of drops) {
+            if (drop.syncStatus === "Pending") {
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
+            }
         }
-    }
 
-    tx = db.transaction(["void_requests"], "readonly"); items = await new Promise(res => tx.objectStore("void_requests").getAll().onsuccess = e => res(e.target.result));
-    for (const req of items) {
-        try {
-            const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
-        } catch(e) {}
-    }
-
-    tx = db.transaction(["shift_reports"], "readonly"); items = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
-    for (const report of items) {
-        if (report.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
+        let voids = await new Promise(res => tx.objectStore("void_requests").getAll().onsuccess = e => res(e.target.result));
+        for (const req of voids) {
+            try {
+                const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
+                let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
+            } catch(e) {}
         }
+
+        let reports = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
+        for (const report of reports) {
+            if (report.syncStatus === "Pending") {
+                try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
+            }
+        }
+        
+        let members = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
+        for (const mem of members) {
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+        }
+        syncMasterData();
+    } finally {
+        isSyncing = false;
     }
-    
-    tx = db.transaction(["unsynced_members"], "readonly"); items = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
-    for (const mem of items) {
-        try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
-    }
-    syncMasterData();
 }
 
-window.onload = async () => { await initDB(); await syncMasterData(); loadSettingsForCart(); checkActiveSession(); window.setInterval(runBackgroundSync, 30000); };
+window.onload = async () => { await initDB(); await syncMasterData(); loadSettingsForCart(); checkActiveSession(); window.setInterval(runBackgroundSync, 15000); };
