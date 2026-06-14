@@ -696,7 +696,7 @@ function submitCashDrop() {
             toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: notes, syncStatus: "Pending"
         };
         
-        db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").add(payload);
+        db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(payload);
         closeCashDrop(); 
         
         if (isLoggingOut) { 
@@ -791,7 +791,7 @@ async function confirmAdminVoid() {
 }
 
 // ---------------------------------------------------------
-// STRICT LOGOUT SEQUENCE & SHIFT REPORTING (FIXED WITH TRY-CATCH)
+// STRICT LOGOUT SEQUENCE & SHIFT REPORTING
 // ---------------------------------------------------------
 function viewPastShift(shiftId) {
     db.transaction(["past_shifts", "local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
@@ -821,11 +821,12 @@ function populateShiftModal(s, isPast) {
     }
     document.getElementById("shift-food-list").innerHTML = `<div style="font-size:12px;">${foodStr.replace(/\n/g, '<br>')}</div>`;
     
+    // ATTACHED DATA PAYLOAD
     window.currentShiftData = {
         isPast: isPast, shiftId: s.shiftId, cashier: s.cashier, totalCustomers: s.totalCustomers, totalPlates: s.totalPlates,
         totalOmset: Number(String(s.totalOmset).replace(/[^\d.-]/g, '')), totalCash: Number(String(s.totalCash).replace(/[^\d.-]/g, '')),
         totalQris: Number(String(s.totalQris).replace(/[^\d.-]/g, '')), totalExpenses: Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')),
-        net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: foodStr
+        net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: foodStr, foodSummary: s.foodSummary || {}
     };
 
     document.getElementById("shift-modal-active-buttons").style.display = isPast ? "none" : "flex"; 
@@ -887,7 +888,7 @@ async function printShiftReport() {
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
-// FIX: Bulletproof Logout. Uses .put() and Catch Blocks to ensure UI resets.
+// BULLETPROOF LOGOUT
 async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData;
     const shiftPayload = {
@@ -900,7 +901,6 @@ async function executeFinalLogout(netCash) {
     if(statusText) statusText.innerText = "MENYINKRONKAN LOGOUT... ⏳";
 
     try {
-        // 1. BULLETPROOF LOCAL SAVE: Use .put() to avoid ConstraintErrors halting the script
         const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
         tx.objectStore("local_shift_history").put(shiftPayload); 
         tx.objectStore("shift_reports").put(shiftPayload);       
@@ -909,7 +909,6 @@ async function executeFinalLogout(netCash) {
         localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
         localStorage.removeItem("pos_active_session"); 
 
-        // 2. NETWORK PUSH: Safely caught so it never stops the logout process
         if (navigator.onLine) {
             try {
                 const response = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
@@ -925,7 +924,6 @@ async function executeFinalLogout(netCash) {
         console.error("Local DB error during logout:", fatalError);
     }
     
-    // 3. GUARANTEED UI RESET: This will always run now.
     activeOrders = []; nextTableNumber = 1; currentOrderIndex = 0; activePlateIndex = 0;
     currentCashier = ""; currentPin = ""; currentShiftId = ""; currentLoginTime = "";
     
