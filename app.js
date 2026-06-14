@@ -663,53 +663,6 @@ function calculateLiveDrawer(callback) {
         callback(liveDrawer);
     };
 }
-function openCashDrop(forLogout = false) {
-    isLoggingOut = forLogout;
-    if (isLoggingOut) {
-        document.getElementById("cash-drop-title").innerText = "🔒 Setoran Akhir Shift";
-        document.getElementById("btn-drop-cancel").innerText = "Batal Keluar";
-        document.getElementById("btn-drop-confirm").innerText = "Konfirmasi & Keluar";
-    } else {
-        document.getElementById("cash-drop-title").innerText = "🏦 Setor Kas";
-        document.getElementById("btn-drop-cancel").innerText = "Batal";
-        document.getElementById("btn-drop-confirm").innerText = "Simpan Catatan";
-    }
-    
-    document.getElementById("drop-admin").value = 0; document.getElementById("drop-bank").value = 0; document.getElementById("drop-notes").value = "";
-    
-    calculateLiveDrawer((liveAmount) => {
-        document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`;
-        document.getElementById("cash-drop-modal").classList.remove("hidden");
-    });
-}
-function closeCashDrop() { document.getElementById("cash-drop-modal").classList.add("hidden"); isLoggingOut = false; }
-function submitCashDrop() {
-    const adminAmt = Number(document.getElementById("drop-admin").value) || 0;
-    const bankAmt = Number(document.getElementById("drop-bank").value) || 0;
-    const notes = document.getElementById("drop-notes").value || (isLoggingOut ? "Akhir Shift" : "Setoran Tengah Shift");
-    
-    calculateLiveDrawer((liveAmount) => {
-        const leftInDrawer = liveAmount - adminAmt - bankAmt;
-        
-        const payload = {
-            dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
-            toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: notes, syncStatus: "Pending"
-        };
-        
-        try {
-            db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(payload);
-        } catch(e) { console.error("Drop save error:", e); }
-        
-        closeCashDrop(); 
-        
-        if (isLoggingOut) { 
-            executeFinalLogout(leftInDrawer); 
-        } else { 
-            runBackgroundSync();
-            alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
-        }
-    });
-}
 
 // ---------------------------------------------------------
 // HISTORY & VOIDS
@@ -810,6 +763,7 @@ function viewPastShift(shiftId) {
         }
     };
 }
+
 function populateShiftModal(s, isPast) {
     document.getElementById("shift-customers").innerText = s.totalCustomers; document.getElementById("shift-plates").innerText = s.totalPlates;
     document.getElementById("shift-omset").innerText = `Rp ${Number(String(s.totalOmset).replace(/[^\d.-]/g, '')).toLocaleString('id-ID')}`;
@@ -824,18 +778,18 @@ function populateShiftModal(s, isPast) {
     }
     document.getElementById("shift-food-list").innerHTML = `<div style="font-size:12px;">${foodStr.replace(/\n/g, '<br>')}</div>`;
     
-    // ATTACHED DATA PAYLOAD (Crash prevented)
     window.currentShiftData = {
         isPast: isPast, shiftId: s.shiftId, cashier: s.cashier, totalCustomers: s.totalCustomers, totalPlates: s.totalPlates,
         totalOmset: Number(String(s.totalOmset).replace(/[^\d.-]/g, '')), totalCash: Number(String(s.totalCash).replace(/[^\d.-]/g, '')),
         totalQris: Number(String(s.totalQris).replace(/[^\d.-]/g, '')), totalExpenses: Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')),
-        net: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: foodStr, foodSummary: s.foodSummary || {}
+        netCash: Number(String(s.netCash).replace(/[^\d.-]/g, '')), foodStr: foodStr, foodSummary: s.foodSummary || {}
     };
 
     document.getElementById("shift-modal-active-buttons").style.display = isPast ? "none" : "flex"; 
     document.getElementById("shift-modal-past-buttons").style.display = isPast ? "flex" : "none";
     document.getElementById("shift-report-modal").classList.remove("hidden");
 }
+
 function openShiftReport() {
     let totalCustomers = 0; let totalPlates = 0; let totalCash = 0; let totalQris = 0; let totalOmset = 0; let totalExpenses = 0; let foodSummary = {};
 
@@ -844,13 +798,13 @@ function openShiftReport() {
         validOrders.forEach(o => {
             totalCustomers++;
             let activePlates = o.plates.filter(p => p.items.length > 0).length; totalPlates += activePlates;
-            totalCash += o.cashAmount; totalQris += o.qrisAmount; totalOmset += o.grandTotal;
+            totalCash += (o.cashAmount || 0); totalQris += (o.qrisAmount || 0); totalOmset += (o.grandTotal || 0);
             o.plates.forEach(p => p.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; }));
         });
 
         db.transaction(["expenses"], "readonly").objectStore("expenses").getAll().onsuccess = (e2) => {
             const validExp = e2.target.result.filter(exp => exp.shiftId === currentShiftId && exp.status !== "Voided" && exp.status !== "Void Pending");
-            validExp.forEach(exp => { totalExpenses += exp.amount; });
+            validExp.forEach(exp => { totalExpenses += (exp.amount || 0); });
 
             calculateLiveDrawer((liveDrawer) => {
                 let s = { shiftId: currentShiftId, cashier: currentCashier, totalCustomers: totalCustomers, totalPlates: totalPlates, totalOmset: totalOmset, totalCash: totalCash, totalQris: totalQris, totalExpenses: totalExpenses, netCash: liveDrawer, foodSummary: foodSummary };
@@ -859,6 +813,7 @@ function openShiftReport() {
         };
     };
 }
+
 async function printShiftReport() {
     const settings = await getDynamicSettings();
     const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
@@ -882,44 +837,76 @@ async function printShiftReport() {
         <div style="display:flex; justify-content:space-between;"><span>QRIS Diterima:</span><span>Rp ${data.totalQris.toLocaleString('id-ID')}</span></div>
         <div style="display:flex; justify-content:space-between; margin-top:5px; font-weight:bold;"><span>Kas Diterima:</span><span>Rp ${data.totalCash.toLocaleString('id-ID')}</span></div>
         <div style="display:flex; justify-content:space-between; color:#e74c3c;"><span>Pengeluaran:</span><span>-Rp ${data.totalExpenses.toLocaleString('id-ID')}</span></div>
-        <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px; margin-top:5px; border-top: 1px solid #000; padding-top: 5px;"><span>UANG DI LACI:</span><span>Rp ${data.net.toLocaleString('id-ID')}</span></div>
+        <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px; margin-top:5px; border-top: 1px solid #000; padding-top: 5px;"><span>UANG DI LACI:</span><span>Rp ${data.netCash.toLocaleString('id-ID')}</span></div>
         <div style="border-bottom:1px dashed #000; margin-top:15px; margin-bottom:5px; font-weight:bold;">ITEM TERJUAL</div>${foodHtml}
         <div style="text-align:center; margin-top:20px; font-weight:bold; font-size: 12px;">AKHIR LAPORAN</div>
     `;
     window.print();
 }
-function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
-function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
-// FIX: 100% Guaranteed Logout. Replicates the "Lock" button mechanics exactly.
+function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
+
+function initiateLogoutSequence() { 
+    document.getElementById("shift-report-modal").classList.add("hidden"); 
+    openCashDrop(true); 
+}
+
+function openCashDrop(forLogout = false) {
+    isLoggingOut = forLogout;
+    document.getElementById("cash-drop-title").innerText = isLoggingOut ? "🔒 Setoran Akhir Shift" : "🏦 Setor Kas";
+    document.getElementById("btn-drop-cancel").innerText = isLoggingOut ? "Batal Keluar" : "Batal";
+    document.getElementById("btn-drop-confirm").innerText = isLoggingOut ? "Konfirmasi & Keluar" : "Simpan Catatan";
+    
+    document.getElementById("drop-admin").value = 0; document.getElementById("drop-bank").value = 0; document.getElementById("drop-notes").value = "";
+    
+    calculateLiveDrawer((liveAmount) => {
+        document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`;
+        document.getElementById("cash-drop-modal").classList.remove("hidden");
+    });
+}
+
+function submitCashDrop() {
+    const adminAmt = Number(document.getElementById("drop-admin").value) || 0;
+    const bankAmt = Number(document.getElementById("drop-bank").value) || 0;
+    const notes = document.getElementById("drop-notes").value || (isLoggingOut ? "Akhir Shift" : "Setoran Tengah Shift");
+    
+    calculateLiveDrawer((liveAmount) => {
+        const leftInDrawer = liveAmount - adminAmt - bankAmt;
+        const payload = {
+            dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
+            toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: notes, syncStatus: "Pending"
+        };
+        
+        try { db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(payload); } catch(e) {}
+        
+        document.getElementById("cash-drop-modal").classList.add("hidden"); 
+        
+        if (isLoggingOut) { 
+            executeFinalLogout(leftInDrawer); 
+        } else { 
+            runBackgroundSync();
+            alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+        }
+    });
+}
+
+// 5. The Bulletproof Execution Engine
 async function executeFinalLogout(netCash) { 
-    // Secure Fallbacks to prevent Undefined crashes
     const data = window.currentShiftData || {};
     const shiftPayload = {
-        shiftId: currentShiftId || ("SHF-" + Date.now()),
-        timestamp: new Date().toISOString(),
-        cashier: currentCashier || "Unknown",
-        loginTime: currentLoginTime || new Date().toISOString(),
-        logoutTime: new Date().toISOString(),
-        totalCustomers: data.totalCustomers || 0,
-        totalPlates: data.totalPlates || 0,
-        totalOmset: data.totalOmset || 0,
-        totalCash: data.totalCash || 0,
-        totalQris: data.totalQris || 0,
-        totalExpenses: data.totalExpenses || 0,
-        netCash: netCash || 0,
-        foodSummary: data.foodSummary || {},
-        syncStatus: "Pending"
+        shiftId: currentShiftId || ("SHF-" + Date.now()), timestamp: new Date().toISOString(), cashier: currentCashier || "Unknown", 
+        loginTime: currentLoginTime || new Date().toISOString(), logoutTime: new Date().toISOString(), 
+        totalCustomers: data.totalCustomers || 0, totalPlates: data.totalPlates || 0, totalOmset: data.totalOmset || 0, 
+        totalCash: data.totalCash || 0, totalQris: data.totalQris || 0, totalExpenses: data.totalExpenses || 0, 
+        netCash: netCash || 0, foodSummary: data.foodSummary || {}, syncStatus: "Pending"
     };
 
-    // Lock down the UI so the user knows it's processing
     const statusText = document.getElementById("network-text");
-    if(statusText) statusText.innerText = "MENYINKRONKAN LOGOUT... ⏳";
-    document.body.style.pointerEvents = "none";
+    if(statusText) statusText.innerText = "LOGOUT... ⏳";
+    document.body.style.pointerEvents = "none"; 
     document.body.style.opacity = "0.7";
 
     try {
-        // 1. SAVE LOCALLY FIRST
         const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
         tx.objectStore("local_shift_history").put(shiftPayload); 
         tx.objectStore("shift_reports").put(shiftPayload);       
@@ -928,12 +915,11 @@ async function executeFinalLogout(netCash) {
         localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
         localStorage.removeItem("pos_active_session"); 
 
-        // 2. NETWORK PUSH WITH A 5-SECOND TIMEOUT
         if (navigator.onLine) {
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 5000); 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000); 
 
+            try {
                 const response = await fetch(API_URL, { 
                     method: "POST", 
                     body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }),
@@ -947,15 +933,14 @@ async function executeFinalLogout(netCash) {
                     tx2.objectStore("shift_reports").delete(shiftPayload.shiftId);
                 }
             } catch (netError) {
-                console.warn("Network delayed. Synced locally.");
+                console.warn("Network delayed or offline. Data safely stored locally.");
             }
         }
     } catch (fatalError) {
-        console.error("Local database error. Forcing logout.", fatalError);
+        console.error("Local database error during logout.", fatalError);
+    } finally {
+        window.location.reload(); 
     }
-    
-    // 3. HARD WIPE (Exactly how Lock Screen works, 100% reliable)
-    window.location.reload(); 
 }
 
 // ---------------------------------------------------------
