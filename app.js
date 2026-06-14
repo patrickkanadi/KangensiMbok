@@ -865,6 +865,11 @@ function openCashDrop(forLogout = false) {
     });
 }
 
+function closeCashDrop() { 
+    document.getElementById("cash-drop-modal").classList.add("hidden"); 
+    isLoggingOut = false; 
+}
+
 function submitCashDrop() {
     const adminAmt = Number(document.getElementById("drop-admin").value) || 0;
     const bankAmt = Number(document.getElementById("drop-bank").value) || 0;
