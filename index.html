@@ -43,7 +43,7 @@
         .sub-cat-btn { padding: 6px 14px; border: 1px solid #3498db; background: white; color: #3498db; border-radius: 20px; font-size: 13px; font-weight: bold; cursor: pointer; white-space: nowrap; }
         .sub-cat-btn.active { background: #3498db; color: white; }
         
-        /* FIX: Grid layout changed to min-content and flex-start to prevent clipping */
+        /* Fixed layout to min-content to avoid cutting off long text */
         #product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); grid-auto-rows: min-content; gap: 15px; padding: 20px; overflow-y: auto; align-content: start; background: #f4f7f6; flex: 1; }
         .product-card { background: #fff; border: none; border-radius: 12px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.06); display: flex; flex-direction: column; justify-content: space-between; padding-top: 15px; overflow: hidden; min-height: 140px; }
         .product-info { padding: 0 10px 10px 10px; flex: 1; display: flex; flex-direction: column; justify-content: flex-start; gap: 5px; }
