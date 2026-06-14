@@ -3,7 +3,6 @@ const DB_NAME = "Buffet_POS_DB";
 const DB_VERSION = 18; 
 let db;
 
-// BUG FIX #1: Strict Mode Declarations added here
 let currentCategory = ""; 
 let currentSubCategory = "All"; 
 let globalMenuData = [];
@@ -25,7 +24,7 @@ window.currentShiftData = {};
 let isLoggingOut = false; 
 
 // ---------------------------------------------------------
-// PWA INSTALL PROMPT (DUAL BUTTON LOGIC)
+// PWA INSTALL PROMPT
 // ---------------------------------------------------------
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -701,7 +700,6 @@ function submitCashDrop() {
         closeCashDrop(); 
         
         if (isLoggingOut) { 
-            // BUG FIX #3: Do NOT run background sync parallel to logout
             executeFinalLogout(leftInDrawer); 
         } else { 
             runBackgroundSync();
@@ -793,7 +791,7 @@ async function confirmAdminVoid() {
 }
 
 // ---------------------------------------------------------
-// STRICT LOGOUT SEQUENCE & SHIFT REPORTING (FIXED)
+// STRICT LOGOUT SEQUENCE & SHIFT REPORTING (FIXED WITH TRY-CATCH)
 // ---------------------------------------------------------
 function viewPastShift(shiftId) {
     db.transaction(["past_shifts", "local_shift_history"], "readonly").objectStore("local_shift_history").get(shiftId).onsuccess = (e) => {
@@ -889,7 +887,7 @@ async function printShiftReport() {
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 function initiateLogoutSequence() { closeShiftReport(); openCashDrop(true); }
 
-// BUG FIX #2: Refactored to async/await for Graceful Degradation (No Reloading!)
+// FIX: Bulletproof Logout. Uses .put() and Catch Blocks to ensure UI resets.
 async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData;
     const shiftPayload = {
@@ -898,33 +896,36 @@ async function executeFinalLogout(netCash) {
         foodSummary: data.foodSummary, syncStatus: "Pending"
     };
 
-    // Temporarily indicate logout sync via Top Bar
     const statusText = document.getElementById("network-text");
     if(statusText) statusText.innerText = "MENYINKRONKAN LOGOUT... ⏳";
 
-    // 1. INSTANT LOCAL SAVE: Secure the shift log
-    const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
-    tx.objectStore("local_shift_history").add(shiftPayload);
-    tx.objectStore("shift_reports").add(shiftPayload);
-    tx.objectStore("active_shifts").delete(currentPin); 
+    try {
+        // 1. BULLETPROOF LOCAL SAVE: Use .put() to avoid ConstraintErrors halting the script
+        const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
+        tx.objectStore("local_shift_history").put(shiftPayload); 
+        tx.objectStore("shift_reports").put(shiftPayload);       
+        if (currentPin) tx.objectStore("active_shifts").delete(currentPin); 
 
-    localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
-    localStorage.removeItem("pos_active_session"); 
+        localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
+        localStorage.removeItem("pos_active_session"); 
 
-    // 2. NETWORK PUSH: Safely wait for Google to record the shift
-    if (navigator.onLine) {
-        try {
-            const response = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
-            const json = await response.json();
-            if (json.status === "Success") {
-                db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId);
+        // 2. NETWORK PUSH: Safely caught so it never stops the logout process
+        if (navigator.onLine) {
+            try {
+                const response = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }) });
+                const json = await response.json();
+                if (json.status === "Success") {
+                    db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(shiftPayload.shiftId);
+                }
+            } catch (netError) {
+                console.warn("Offline logout, report saved locally and will sync later.");
             }
-        } catch (e) {
-            console.log("Offline logout, saved locally.");
         }
+    } catch (fatalError) {
+        console.error("Local DB error during logout:", fatalError);
     }
     
-    // 3. CLEAN DOM RESET: Wipe the interface and toggle CSS
+    // 3. GUARANTEED UI RESET: This will always run now.
     activeOrders = []; nextTableNumber = 1; currentOrderIndex = 0; activePlateIndex = 0;
     currentCashier = ""; currentPin = ""; currentShiftId = ""; currentLoginTime = "";
     
