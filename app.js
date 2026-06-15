@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 23; 
+const DB_VERSION = 24; 
 let db;
 
 let currentCategory = ""; 
@@ -54,7 +54,7 @@ document.getElementById('top-install-btn')?.addEventListener('click', handleInst
 document.getElementById('workspace-install-btn')?.addEventListener('click', handleInstallClick);
 
 // ---------------------------------------------------------
-// DATABASE INITIALIZATION (DIJAMIN BEBAS SYNTAX ERROR)
+// DATABASE INITIALIZATION
 // ---------------------------------------------------------
 function initDB() {
     return new Promise((resolve, reject) => {
@@ -62,29 +62,15 @@ function initDB() {
         request.onupgradeneeded = (event) => {
             db = event.target.result;
             
-            // Cara yang jauh lebih aman dan bersih untuk mendefinisikan keyPath
             const dbStores = {
-                "staff": "pin",
-                "menu": "itemId",
-                "settings": "key",
-                "orders": "orderId",
-                "expenses": "expenseId",
-                "members": "phone",
-                "unsynced_members": "phone",
-                "expense_categories": "name",
-                "void_requests": "id",
-                "promo_codes": "code",
-                "shift_reports": "shiftId",
-                "past_shifts": "shiftId",
-                "active_shifts": "pin",
-                "cash_drops": "dropId",
-                "local_shift_history": "shiftId"
+                "staff": "pin", "menu": "itemId", "settings": "key", "orders": "orderId", "expenses": "expenseId",
+                "members": "phone", "unsynced_members": "phone", "expense_categories": "name", "void_requests": "id",
+                "promo_codes": "code", "shift_reports": "shiftId", "past_shifts": "shiftId", "active_shifts": "pin",
+                "cash_drops": "dropId", "local_shift_history": "shiftId"
             };
 
             Object.keys(dbStores).forEach(storeName => {
-                if (db.objectStoreNames.contains(storeName)) {
-                    db.deleteObjectStore(storeName);
-                }
+                if (db.objectStoreNames.contains(storeName)) { db.deleteObjectStore(storeName); }
                 db.createObjectStore(storeName, { keyPath: dbStores[storeName] });
             });
         };
@@ -170,16 +156,15 @@ function loadSessionData(session) {
 function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
-// MASTER DATA SYNC (ISOLATED FAULT-TOLERANT TRANSACTIONS)
+// SILENT MASTER DATA SYNC (AUTO-PULL)
 // ---------------------------------------------------------
 async function loginScreenSync() {
     const btn = document.getElementById("login-sync-btn");
     btn.disabled = true;
-    await syncMasterData();
+    await syncMasterData(false); // Explicit non-silent mode
     btn.disabled = false;
 }
 
-// FUNGSI PENYELAMAT: Mengisolasi setiap tabel agar tidak rollback massal
 async function syncDataStore(storeName, dataArray) {
     if (!dataArray || dataArray.length === 0) return;
     return new Promise((resolve) => {
@@ -194,21 +179,24 @@ async function syncDataStore(storeName, dataArray) {
     });
 }
 
-async function syncMasterData() {
+// DITAMBAHKAN PARAMETER "isSilent" AGAR BISA BERJALAN DI LATAR BELAKANG
+async function syncMasterData(isSilent = false) {
     const statusText = document.getElementById("network-text");
     const loginStatus = document.getElementById("login-sync-status");
     const loginBtn = document.querySelector("#login-screen button");
     
     if (!navigator.onLine) { 
         if(statusText) statusText.innerText = "Mode Offline"; 
-        if(loginStatus) loginStatus.innerText = "Status: Mode Offline ❌"; 
+        if(!isSilent && loginStatus) loginStatus.innerText = "Status: Mode Offline ❌"; 
         const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#e74c3c"; 
         return; 
     }
     
-    if(statusText) statusText.innerText = "Menyinkronkan...";
-    if(loginStatus) loginStatus.innerText = "Status: Menyinkronkan... ⏳"; 
-    if(loginBtn) loginBtn.disabled = true;
+    if(!isSilent) {
+        if(statusText) statusText.innerText = "Menyinkronkan...";
+        if(loginStatus) loginStatus.innerText = "Status: Menyinkronkan... ⏳"; 
+        if(loginBtn) loginBtn.disabled = true;
+    }
     
     try {
         const response = await fetch(API_URL); 
@@ -219,7 +207,6 @@ async function syncMasterData() {
         if (result.status === "Success") {
             window.masterDrawerBalance = result.masterDrawerBalance || 0; 
             
-            // Proses tabel satu per satu secara terpisah
             await syncDataStore("staff", result.data.staff);
             await syncDataStore("menu", result.data.menu);
             await syncDataStore("members", result.data.members);
@@ -240,16 +227,16 @@ async function syncMasterData() {
             if(!document.getElementById("pos-screen").classList.contains("hidden")) { renderProductGrid(); }
 
             if(statusText) statusText.innerText = "Online & Sinkron"; 
-            if(loginStatus) loginStatus.innerText = "Status: Database Tersinkron ✅"; 
+            if(!isSilent && loginStatus) loginStatus.innerText = "Status: Database Tersinkron ✅"; 
             loadSettingsForCart();
         }
     } catch (error) { 
-        alert("Error Sinkronisasi: " + error.message);
+        if(!isSilent) alert("Error Sinkronisasi: " + error.message);
         if(statusText) statusText.innerText = "Online (Lokal)"; 
-        if(loginStatus) loginStatus.innerText = "Status: Sinkronisasi Gagal ⚠️"; 
+        if(!isSilent && loginStatus) loginStatus.innerText = "Status: Sinkronisasi Gagal ⚠️"; 
         const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#f39c12"; 
     } finally {
-        if(loginBtn) loginBtn.disabled = false;
+        if(!isSilent && loginBtn) loginBtn.disabled = false;
     }
 }
 
@@ -470,7 +457,9 @@ function confirmAddTable() {
     }
     activeOrders.push({ name: `Meja ${tablePrefix}${nextTableNumber}`, customerName: name, customerPhone: phone || "Walk-in", plates: [{ plateId: 1, items: [] }] });
     nextTableNumber++; currentOrderIndex = activeOrders.length - 1; activePlateIndex = 0;
-    preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
+    preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); 
+    // Trigger push immediately
+    runBackgroundSync();
 }
 function loadSettingsForCart() {
     db.transaction(["settings"], "readonly").objectStore("settings").get("Tax_Rate_Percent").onsuccess = (e) => {
@@ -669,7 +658,9 @@ async function finalizePayment(shouldPrint) {
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
     closeReview(); activeOrders.splice(currentOrderIndex, 1);
     currentOrderIndex = 0; activePlateIndex = 0; 
-    preserveUnpaidTables(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
+    preserveUnpaidTables(); renderCustomerTabs(); renderCartUI(); 
+    // Trigger push immediately
+    runBackgroundSync();
 }
 async function getDynamicSettings() {
     return new Promise(res => {
@@ -964,6 +955,7 @@ function submitCashDrop() {
         if (isLoggingOut) { 
             executeFinalLogout(leftInDrawer); 
         } else { 
+            // Trigger push immediately
             runBackgroundSync();
             alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
         }
@@ -1040,13 +1032,15 @@ function saveExpense() {
 
     const payload = { expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", syncStatus: "Pending" };
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
-    closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Tercatat!"); runBackgroundSync();
+    closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Tercatat!"); 
+    // Trigger push immediately
+    runBackgroundSync();
 }
 function openSettings() { document.getElementById("settings-modal").classList.remove("hidden"); }
 function closeSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
 
 // ---------------------------------------------------------
-// BACKGROUND SYNC ENGINE 
+// BACKGROUND SYNC ENGINE (PUSH ONLY)
 // ---------------------------------------------------------
 async function runBackgroundSync() {
     if (!navigator.onLine) return; 
@@ -1092,10 +1086,18 @@ async function runBackgroundSync() {
     }
 }
 
+// ---------------------------------------------------------
+// AUTO-SYNC TIMERS
+// ---------------------------------------------------------
 window.onload = async () => { 
     await initDB(); 
-    await syncMasterData(); 
+    await syncMasterData(false); 
     loadSettingsForCart(); 
     checkActiveSession(); 
-    window.setInterval(runBackgroundSync, 30000); 
+    
+    // 1. PUSH: Mengirim data ke Google Sheets setiap 15 detik (Background)
+    window.setInterval(runBackgroundSync, 15000); 
+    
+    // 2. PULL: Menarik Menu/Harga baru dari Google Sheets secara diam-diam setiap 60 detik
+    window.setInterval(() => syncMasterData(true), 60000); 
 };
