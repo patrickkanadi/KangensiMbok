@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 22; // NAIK VERSI: Hancurkan DB korup lama
+const DB_VERSION = 23; 
 let db;
 
 let currentCategory = ""; 
@@ -54,23 +54,45 @@ document.getElementById('top-install-btn')?.addEventListener('click', handleInst
 document.getElementById('workspace-install-btn')?.addEventListener('click', handleInstallClick);
 
 // ---------------------------------------------------------
-// DATABASE INITIALIZATION
+// DATABASE INITIALIZATION (DIJAMIN BEBAS SYNTAX ERROR)
 // ---------------------------------------------------------
 function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (event) => {
             db = event.target.result;
-            const stores = ["staff","menu","settings","orders","expenses","members","unsynced_members","expense_categories","void_requests","promo_codes","shift_reports","past_shifts","active_shifts","cash_drops","local_shift_history"];
-            stores.forEach(s => { 
-                if(db.objectStoreNames.contains(s)) db.deleteObjectStore(s); 
-                db.createObjectStore(s, {keyPath: s === "staff" ? "pin" : (s === "menu" ? "itemId" : (s === "settings" ? "key" : (s === "orders" ? "orderId" : (s === "expenses" ? "expenseId" : (s === "members" ? "phone" : (s === "unsynced_members" ? "phone" : (s === "expense_categories" ? "name" : (s === "void_requests" ? "id" : (s === "promo_codes" ? "code" : (s === "shift_reports" ? "shiftId" : (s === "past_shifts" ? "shiftId" : (s === "active_shifts" ? "pin" : (s === "cash_drops" ? "dropId" : "shiftId"))))))))))))});
+            
+            // Cara yang jauh lebih aman dan bersih untuk mendefinisikan keyPath
+            const dbStores = {
+                "staff": "pin",
+                "menu": "itemId",
+                "settings": "key",
+                "orders": "orderId",
+                "expenses": "expenseId",
+                "members": "phone",
+                "unsynced_members": "phone",
+                "expense_categories": "name",
+                "void_requests": "id",
+                "promo_codes": "code",
+                "shift_reports": "shiftId",
+                "past_shifts": "shiftId",
+                "active_shifts": "pin",
+                "cash_drops": "dropId",
+                "local_shift_history": "shiftId"
+            };
+
+            Object.keys(dbStores).forEach(storeName => {
+                if (db.objectStoreNames.contains(storeName)) {
+                    db.deleteObjectStore(storeName);
+                }
+                db.createObjectStore(storeName, { keyPath: dbStores[storeName] });
             });
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
         request.onerror = (event) => { reject(event.target.errorCode); };
     });
 }
+
 function preserveUnpaidTables() {
     if (!currentShiftId) return;
     const cacheState = { activeOrders: activeOrders, nextTableNumber: nextTableNumber, currentOrderIndex: currentOrderIndex, activePlateIndex: activePlateIndex };
@@ -1068,7 +1090,12 @@ async function runBackgroundSync() {
     for (const mem of items) {
         try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
     }
-    syncMasterData();
 }
 
-window.onload = async () => { await initDB(); await syncMasterData(); loadSettingsForCart(); checkActiveSession(); window.setInterval(runBackgroundSync, 30000); };
+window.onload = async () => { 
+    await initDB(); 
+    await syncMasterData(); 
+    loadSettingsForCart(); 
+    checkActiveSession(); 
+    window.setInterval(runBackgroundSync, 30000); 
+};
