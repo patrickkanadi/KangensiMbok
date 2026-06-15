@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 19; // NAIK VERSI: Memaksa browser untuk menghapus memori lama yang korup
+const DB_VERSION = 21; // NAIK VERSI KE 21 UNTUK MEMAKSA WIPE DATABASE LAMA
 let db;
 
 let currentCategory = ""; 
@@ -33,8 +33,10 @@ let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); 
     deferredPrompt = e;
+    
     const loginBtn = document.getElementById('top-install-btn');
     const workspaceBtn = document.getElementById('workspace-install-btn');
+    
     if (loginBtn) loginBtn.classList.remove('hidden');
     if (workspaceBtn) workspaceBtn.classList.remove('hidden');
 });
@@ -61,21 +63,11 @@ function initDB() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (event) => {
             db = event.target.result;
-            if (!db.objectStoreNames.contains("staff")) db.createObjectStore("staff", { keyPath: "pin" });
-            if (!db.objectStoreNames.contains("menu")) db.createObjectStore("menu", { keyPath: "itemId" });
-            if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings", { keyPath: "key" });
-            if (!db.objectStoreNames.contains("orders")) db.createObjectStore("orders", { keyPath: "orderId" });
-            if (!db.objectStoreNames.contains("expenses")) db.createObjectStore("expenses", { keyPath: "expenseId" });
-            if (!db.objectStoreNames.contains("members")) db.createObjectStore("members", { keyPath: "phone" });
-            if (!db.objectStoreNames.contains("unsynced_members")) db.createObjectStore("unsynced_members", { keyPath: "phone" });
-            if (!db.objectStoreNames.contains("expense_categories")) db.createObjectStore("expense_categories", { keyPath: "name" });
-            if (!db.objectStoreNames.contains("void_requests")) db.createObjectStore("void_requests", { keyPath: "id" }); 
-            if (!db.objectStoreNames.contains("promo_codes")) db.createObjectStore("promo_codes", { keyPath: "code" }); 
-            if (!db.objectStoreNames.contains("shift_reports")) db.createObjectStore("shift_reports", { keyPath: "shiftId" }); 
-            if (!db.objectStoreNames.contains("past_shifts")) db.createObjectStore("past_shifts", { keyPath: "shiftId" }); 
-            if (!db.objectStoreNames.contains("active_shifts")) db.createObjectStore("active_shifts", { keyPath: "pin" }); 
-            if (!db.objectStoreNames.contains("cash_drops")) db.createObjectStore("cash_drops", { keyPath: "dropId" }); 
-            if (!db.objectStoreNames.contains("local_shift_history")) db.createObjectStore("local_shift_history", { keyPath: "shiftId" }); 
+            const stores = ["staff","menu","settings","orders","expenses","members","unsynced_members","expense_categories","void_requests","promo_codes","shift_reports","past_shifts","active_shifts","cash_drops","local_shift_history"];
+            stores.forEach(s => { 
+                if(db.objectStoreNames.contains(s)) db.deleteObjectStore(s); 
+                db.createObjectStore(s, {keyPath: s === "staff" ? "pin" : (s === "menu" ? "itemId" : (s === "settings" ? "key" : (s === "orders" ? "orderId" : (s === "expenses" ? "expenseId" : (s === "members" ? "phone" : (s === "unsynced_members" ? "phone" : (s === "expense_categories" ? "name" : (s === "void_requests" ? "id" : (s === "promo_codes" ? "code" : (s === "shift_reports" ? "shiftId" : (s === "past_shifts" ? "shiftId" : (s === "active_shifts" ? "pin" : (s === "cash_drops" ? "dropId" : "shiftId"))))))))))))});
+            });
         };
         request.onsuccess = (event) => { db = event.target.result; resolve(db); };
         request.onerror = (event) => { reject(event.target.errorCode); };
@@ -96,10 +88,10 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT (DENGAN SMART DEBUGGER)
+// LOGIN & SESSION MANAGEMENT (TYPE-SAFE FIX)
 // ---------------------------------------------------------
 function attemptLogin() {
-    const pinInput = document.getElementById("cashier-pin").value.trim();
+    const pinInput = String(document.getElementById("cashier-pin").value).trim();
     if (!pinInput) return alert("Harap masukkan PIN");
 
     try {
@@ -108,7 +100,7 @@ function attemptLogin() {
             const staffMember = staffList.find(s => String(s.pin).trim() === pinInput);
 
             if (staffMember) {
-                db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
+                db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
                     let sessionData;
                     if (shiftRes.target.result) {
                         sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
@@ -120,16 +112,12 @@ function attemptLogin() {
                     loadSessionData(sessionData);
                 };
             } else { 
-                // SMART DEBUGGER: Jika gagal, ini akan membongkar isi otak tablet!
-                let memoryDump = staffList.map(s => `[${s.pin}] - ${s.name}`).join("\n");
-                if (!memoryDump) memoryDump = "KOSONG! Data belum terunduh.";
-                
-                alert(`PIN "${pinInput}" gagal.\n\nMemori tablet saat ini berisi:\n---------------------\n${memoryDump}\n---------------------\nJika memori kosong, klik Sinkronisasi Database!`); 
+                alert(`PIN "${pinInput}" tidak terdaftar.\n\nHarap klik tombol Sinkronisasi Database di layar ini.`); 
                 document.getElementById("cashier-pin").value = ""; 
             }
         };
     } catch(err) {
-        alert("Database lokal belum siap. Harap klik Sinkronisasi Database.");
+        alert("Database belum siap. Harap klik Sinkronisasi Database.");
     }
 }
 
@@ -160,7 +148,7 @@ function loadSessionData(session) {
 function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
-// MASTER DATA SYNC (AND VISUAL REFRESH)
+// MASTER DATA SYNC (BULLETPROOF GUARD)
 // ---------------------------------------------------------
 async function loginScreenSync() {
     const btn = document.getElementById("login-sync-btn");
@@ -171,6 +159,7 @@ async function loginScreenSync() {
 async function syncMasterData() {
     const statusText = document.getElementById("network-text");
     const loginStatus = document.getElementById("login-sync-status");
+    const loginBtn = document.querySelector("#login-screen button");
     
     if (!navigator.onLine) { 
         if(statusText) statusText.innerText = "Mode Offline"; 
@@ -180,22 +169,41 @@ async function syncMasterData() {
     }
     
     if(statusText) statusText.innerText = "Menyinkronkan...";
-    if(loginStatus) loginStatus.innerText = "Status: Menyinkronkan dengan Server... ⏳"; 
+    if(loginStatus) loginStatus.innerText = "Status: Menyinkronkan... ⏳"; 
+    if(loginBtn) loginBtn.disabled = true;
     
     try {
-        const response = await fetch(API_URL); const result = await response.json();
+        const response = await fetch(API_URL); 
+        const text = await response.text();
+        if (text.includes("<!DOCTYPE html>")) throw new Error("Akses ditolak oleh Google. Harap buka URL Script di browser baru untuk login.");
+        
+        const result = JSON.parse(text);
         if (result.status === "Success") {
             window.masterDrawerBalance = result.masterDrawerBalance || 0; 
             
             const transaction = db.transaction(["staff", "menu", "settings", "members", "expense_categories", "promo_codes", "past_shifts"], "readwrite");
+            transaction.onerror = (e) => console.error("Sync Transaksi Gagal", e);
+
+            const staffStore = transaction.objectStore("staff"); staffStore.clear(); 
+            if(result.data.staff) result.data.staff.forEach(person => staffStore.put(person));
             
-            const staffStore = transaction.objectStore("staff"); staffStore.clear(); result.data.staff.forEach(person => staffStore.add(person));
-            const menuStore = transaction.objectStore("menu"); menuStore.clear(); result.data.menu.forEach(item => menuStore.add(item));
-            const settingsStore = transaction.objectStore("settings"); settingsStore.clear(); for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.add({ key: key, value: value }); }
-            const membersStore = transaction.objectStore("members"); membersStore.clear(); result.data.members.forEach(member => membersStore.add(member));
-            const expCatStore = transaction.objectStore("expense_categories"); expCatStore.clear(); if (result.data.expenseCategories) result.data.expenseCategories.forEach(cat => expCatStore.add({ name: cat }));
-            const promoStore = transaction.objectStore("promo_codes"); promoStore.clear(); if (result.data.promoCodes) result.data.promoCodes.forEach(p => promoStore.add(p));
-            const pastShiftsStore = transaction.objectStore("past_shifts"); pastShiftsStore.clear(); if (result.data.pastShifts) result.data.pastShifts.forEach(s => pastShiftsStore.add(s));
+            const menuStore = transaction.objectStore("menu"); menuStore.clear(); 
+            if(result.data.menu) result.data.menu.forEach(item => menuStore.put(item));
+            
+            const settingsStore = transaction.objectStore("settings"); settingsStore.clear(); 
+            if(result.data.settings) for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.put({ key: key, value: value }); }
+            
+            const membersStore = transaction.objectStore("members"); membersStore.clear(); 
+            if(result.data.members) result.data.members.forEach(member => membersStore.put(member));
+            
+            const expCatStore = transaction.objectStore("expense_categories"); expCatStore.clear(); 
+            if (result.data.expenseCategories) result.data.expenseCategories.forEach(cat => expCatStore.put({ name: cat }));
+            
+            const promoStore = transaction.objectStore("promo_codes"); promoStore.clear(); 
+            if (result.data.promoCodes) result.data.promoCodes.forEach(p => promoStore.put(p));
+            
+            const pastShiftsStore = transaction.objectStore("past_shifts"); pastShiftsStore.clear(); 
+            if (result.data.pastShifts) result.data.pastShifts.forEach(s => pastShiftsStore.put(s));
 
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
             
@@ -207,9 +215,12 @@ async function syncMasterData() {
             loadSettingsForCart();
         }
     } catch (error) { 
+        alert("Error Sinkronisasi: " + error.message);
         if(statusText) statusText.innerText = "Online (Lokal)"; 
         if(loginStatus) loginStatus.innerText = "Status: Sinkronisasi Gagal ⚠️"; 
         const dot = document.getElementById("network-dot"); if(dot) dot.style.backgroundColor = "#f39c12"; 
+    } finally {
+        if(loginBtn) loginBtn.disabled = false;
     }
 }
 
@@ -1052,4 +1063,5 @@ async function runBackgroundSync() {
     }
     syncMasterData();
 }
+
 window.onload = async () => { await initDB(); await syncMasterData(); loadSettingsForCart(); checkActiveSession(); window.setInterval(runBackgroundSync, 30000); };
