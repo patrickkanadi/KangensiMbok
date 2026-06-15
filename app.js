@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 18; 
+const DB_VERSION = 19; // NAIK VERSI: Memaksa browser untuk menghapus memori lama yang korup
 let db;
 
 let currentCategory = ""; 
@@ -33,10 +33,8 @@ let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); 
     deferredPrompt = e;
-    
     const loginBtn = document.getElementById('top-install-btn');
     const workspaceBtn = document.getElementById('workspace-install-btn');
-    
     if (loginBtn) loginBtn.classList.remove('hidden');
     if (workspaceBtn) workspaceBtn.classList.remove('hidden');
 });
@@ -98,14 +96,13 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT (TYPE-SAFE FIX)
+// LOGIN & SESSION MANAGEMENT (DENGAN SMART DEBUGGER)
 // ---------------------------------------------------------
 function attemptLogin() {
     const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Harap masukkan PIN");
 
     try {
-        // FIX: Pull all staff and match as strings to prevent Number/Text type mismatch
         db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
             const staffList = e.target.result;
             const staffMember = staffList.find(s => String(s.pin).trim() === pinInput);
@@ -123,12 +120,16 @@ function attemptLogin() {
                     loadSessionData(sessionData);
                 };
             } else { 
-                alert(`PIN "${pinInput}" tidak terdaftar.\n\nJika Anda baru mengubahnya di Sheets, harap klik Sinkronisasi Database terlebih dahulu.`); 
+                // SMART DEBUGGER: Jika gagal, ini akan membongkar isi otak tablet!
+                let memoryDump = staffList.map(s => `[${s.pin}] - ${s.name}`).join("\n");
+                if (!memoryDump) memoryDump = "KOSONG! Data belum terunduh.";
+                
+                alert(`PIN "${pinInput}" gagal.\n\nMemori tablet saat ini berisi:\n---------------------\n${memoryDump}\n---------------------\nJika memori kosong, klik Sinkronisasi Database!`); 
                 document.getElementById("cashier-pin").value = ""; 
             }
         };
     } catch(err) {
-        alert("Database belum siap. Harap klik Sinkronisasi Database.");
+        alert("Database lokal belum siap. Harap klik Sinkronisasi Database.");
     }
 }
 
