@@ -1,5 +1,5 @@
 // <--- GANTI_DENGAN_URL_WEB_APP_GOOGLE_ANDA_DISINI --->
-const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec"; 
+const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2vUV431kXl6JsgXu63TkoodlqdEZ3p_o6a20F9rT3zPBYk/exec"; 
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
@@ -98,29 +98,51 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT
+// LOGIN & SESSION MANAGEMENT (BULLETPROOF PIN CHECK)
 // ---------------------------------------------------------
 function attemptLogin() {
-    const pinInput = document.getElementById("cashier-pin").value;
+    // Strips away accidental spaces
+    const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Harap masukkan PIN");
 
-    db.transaction(["staff"], "readonly").objectStore("staff").get(pinInput).onsuccess = (e) => {
-        const staffMember = e.target.result;
-        if (staffMember) {
-            db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
-                let sessionData;
-                if (shiftRes.target.result) {
-                    sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
-                } else {
-                    sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
-                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime });
-                }
-                localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
-                loadSessionData(sessionData);
-            };
-        } else { alert("PIN tidak valid."); document.getElementById("cashier-pin").value = ""; }
-    };
+    try {
+        db.transaction(["staff"], "readonly").objectStore("staff").get(pinInput).onsuccess = (e) => {
+            const staffMember = e.target.result;
+            if (staffMember) {
+                db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
+                    let sessionData;
+                    if (shiftRes.target.result) {
+                        sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
+                    } else {
+                        sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
+                        db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime });
+                    }
+                    localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
+                    loadSessionData(sessionData);
+                };
+            } else { 
+                alert(`PIN "${pinInput}" tidak terdaftar.\n\nJika Anda baru mengubahnya di Sheets, harap klik Sinkronisasi Database terlebih dahulu.`); 
+                document.getElementById("cashier-pin").value = ""; 
+            }
+        };
+    } catch(err) {
+        alert("Database belum siap. Harap klik Sinkronisasi Database.");
+    }
 }
+
+// Add 'Enter' Key support for fast logins
+document.addEventListener("DOMContentLoaded", () => {
+    const pinField = document.getElementById("cashier-pin");
+    if(pinField) {
+        pinField.addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                attemptLogin();
+            }
+        });
+    }
+});
+
 function checkActiveSession() {
     const savedSession = localStorage.getItem("pos_active_session");
     if (savedSession) { loadSessionData(JSON.parse(savedSession)); }
@@ -175,7 +197,7 @@ async function syncMasterData() {
 
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
             
-            globalMenuData = result.data.menu;
+            globalMenuData = result.data.menu || [];
             if(!document.getElementById("pos-screen").classList.contains("hidden")) { renderProductGrid(); }
 
             if(statusText) statusText.innerText = "Online & Sinkron"; 
@@ -262,10 +284,18 @@ function applyVoidAftermath(order) {
 function loadMenuUI() {
     const store = db.transaction(["menu"], "readonly").objectStore("menu");
     store.getAll().onsuccess = (e) => {
-        globalMenuData = e.target.result;
-        if (globalMenuData.length === 0) return;
-        const categories = [...new Set(globalMenuData.map(item => item.category))];
-        currentCategory = categories[0]; 
+        globalMenuData = e.target.result || [];
+        if (globalMenuData.length === 0) {
+            document.getElementById("product-grid").innerHTML = "<div style='padding:20px;'>Menu kosong. Silakan isi Menu_Master di Google Sheets.</div>";
+            return;
+        }
+        
+        const categories = [...new Set(globalMenuData.map(item => item.category))].filter(Boolean);
+        if(categories.length > 0) {
+            currentCategory = categories[0]; 
+        } else {
+            currentCategory = "Uncategorized";
+        }
 
         const tabsContainer = document.getElementById("category-container"); tabsContainer.innerHTML = ""; 
         categories.forEach((cat) => {
