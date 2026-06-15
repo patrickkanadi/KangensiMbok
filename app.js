@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 21; // NAIK VERSI KE 21 UNTUK MEMAKSA WIPE DATABASE LAMA
+const DB_VERSION = 22; // NAIK VERSI: Hancurkan DB korup lama
 let db;
 
 let currentCategory = ""; 
@@ -33,10 +33,8 @@ let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault(); 
     deferredPrompt = e;
-    
     const loginBtn = document.getElementById('top-install-btn');
     const workspaceBtn = document.getElementById('workspace-install-btn');
-    
     if (loginBtn) loginBtn.classList.remove('hidden');
     if (workspaceBtn) workspaceBtn.classList.remove('hidden');
 });
@@ -88,7 +86,7 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT (TYPE-SAFE FIX)
+// LOGIN & SESSION MANAGEMENT 
 // ---------------------------------------------------------
 function attemptLogin() {
     const pinInput = String(document.getElementById("cashier-pin").value).trim();
@@ -112,7 +110,9 @@ function attemptLogin() {
                     loadSessionData(sessionData);
                 };
             } else { 
-                alert(`PIN "${pinInput}" tidak terdaftar.\n\nHarap klik tombol Sinkronisasi Database di layar ini.`); 
+                let memoryDump = staffList.map(s => `[${s.pin}] - ${s.name}`).join("\n");
+                if (!memoryDump) memoryDump = "KOSONG! Data belum terunduh.";
+                alert(`PIN "${pinInput}" gagal.\n\nMemori tablet saat ini berisi:\n---------------------\n${memoryDump}\n---------------------\nJika memori kosong, klik Sinkronisasi Database!`); 
                 document.getElementById("cashier-pin").value = ""; 
             }
         };
@@ -148,7 +148,7 @@ function loadSessionData(session) {
 function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
-// MASTER DATA SYNC (BULLETPROOF GUARD)
+// MASTER DATA SYNC (ISOLATED FAULT-TOLERANT TRANSACTIONS)
 // ---------------------------------------------------------
 async function loginScreenSync() {
     const btn = document.getElementById("login-sync-btn");
@@ -156,6 +156,22 @@ async function loginScreenSync() {
     await syncMasterData();
     btn.disabled = false;
 }
+
+// FUNGSI PENYELAMAT: Mengisolasi setiap tabel agar tidak rollback massal
+async function syncDataStore(storeName, dataArray) {
+    if (!dataArray || dataArray.length === 0) return;
+    return new Promise((resolve) => {
+        const tx = db.transaction([storeName], "readwrite");
+        const store = tx.objectStore(storeName);
+        store.clear();
+        dataArray.forEach(item => {
+            try { store.put(item); } catch(err) { console.warn(`Data korup dilewati di ${storeName}:`, item); }
+        });
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = (e) => { console.error(`Gagal sinkron ${storeName}`, e); resolve(false); };
+    });
+}
+
 async function syncMasterData() {
     const statusText = document.getElementById("network-text");
     const loginStatus = document.getElementById("login-sync-status");
@@ -181,29 +197,20 @@ async function syncMasterData() {
         if (result.status === "Success") {
             window.masterDrawerBalance = result.masterDrawerBalance || 0; 
             
-            const transaction = db.transaction(["staff", "menu", "settings", "members", "expense_categories", "promo_codes", "past_shifts"], "readwrite");
-            transaction.onerror = (e) => console.error("Sync Transaksi Gagal", e);
-
-            const staffStore = transaction.objectStore("staff"); staffStore.clear(); 
-            if(result.data.staff) result.data.staff.forEach(person => staffStore.put(person));
+            // Proses tabel satu per satu secara terpisah
+            await syncDataStore("staff", result.data.staff);
+            await syncDataStore("menu", result.data.menu);
+            await syncDataStore("members", result.data.members);
+            await syncDataStore("promo_codes", result.data.promoCodes);
+            await syncDataStore("past_shifts", result.data.pastShifts);
             
-            const menuStore = transaction.objectStore("menu"); menuStore.clear(); 
-            if(result.data.menu) result.data.menu.forEach(item => menuStore.put(item));
+            let settingsArr = [];
+            if(result.data.settings) for (const [key, value] of Object.entries(result.data.settings)) { settingsArr.push({ key: key, value: value }); }
+            await syncDataStore("settings", settingsArr);
             
-            const settingsStore = transaction.objectStore("settings"); settingsStore.clear(); 
-            if(result.data.settings) for (const [key, value] of Object.entries(result.data.settings)) { settingsStore.put({ key: key, value: value }); }
-            
-            const membersStore = transaction.objectStore("members"); membersStore.clear(); 
-            if(result.data.members) result.data.members.forEach(member => membersStore.put(member));
-            
-            const expCatStore = transaction.objectStore("expense_categories"); expCatStore.clear(); 
-            if (result.data.expenseCategories) result.data.expenseCategories.forEach(cat => expCatStore.put({ name: cat }));
-            
-            const promoStore = transaction.objectStore("promo_codes"); promoStore.clear(); 
-            if (result.data.promoCodes) result.data.promoCodes.forEach(p => promoStore.put(p));
-            
-            const pastShiftsStore = transaction.objectStore("past_shifts"); pastShiftsStore.clear(); 
-            if (result.data.pastShifts) result.data.pastShifts.forEach(s => pastShiftsStore.put(s));
+            let catArr = [];
+            if (result.data.expenseCategories) result.data.expenseCategories.forEach(cat => catArr.push({ name: cat }));
+            await syncDataStore("expense_categories", catArr);
 
             if (result.data.authStatuses) processVoidApprovals(result.data.authStatuses);
             
