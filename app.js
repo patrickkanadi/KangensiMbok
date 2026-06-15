@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 19; 
+const DB_VERSION = 18; 
 let db;
 
 let currentCategory = ""; 
@@ -98,16 +98,18 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT (BULLETPROOF PIN CHECK)
+// LOGIN & SESSION MANAGEMENT (TYPE-SAFE FIX)
 // ---------------------------------------------------------
 function attemptLogin() {
-    // Strips away accidental spaces
     const pinInput = document.getElementById("cashier-pin").value.trim();
     if (!pinInput) return alert("Harap masukkan PIN");
 
     try {
-        db.transaction(["staff"], "readonly").objectStore("staff").get(pinInput).onsuccess = (e) => {
-            const staffMember = e.target.result;
+        // FIX: Pull all staff and match as strings to prevent Number/Text type mismatch
+        db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
+            const staffList = e.target.result;
+            const staffMember = staffList.find(s => String(s.pin).trim() === pinInput);
+
             if (staffMember) {
                 db.transaction(["active_shifts"], "readonly").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
                     let sessionData;
@@ -130,7 +132,6 @@ function attemptLogin() {
     }
 }
 
-// Add 'Enter' Key support for fast logins
 document.addEventListener("DOMContentLoaded", () => {
     const pinField = document.getElementById("cashier-pin");
     if(pinField) {
