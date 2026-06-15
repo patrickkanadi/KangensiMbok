@@ -1,4 +1,7 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec";
+// <--- GANTI_DENGAN_URL_WEB_APP_GOOGLE_ANDA_DISINI --->
+const API_URL = "https://script.google.com/macros/s/AKfycbz228gxhOZUW1PyOZVbj1XX6B7SxmYRiZlyLlYSp38sBZzCZKpo4O5baORr4DxvIRjy/exec"; 
+// ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
+
 const DB_NAME = "Buffet_POS_DB";
 const DB_VERSION = 18; 
 let db;
