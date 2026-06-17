@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 24; 
+const DB_VERSION = 25; 
 let db;
 
 let currentCategory = ""; 
@@ -54,7 +54,7 @@ document.getElementById('top-install-btn')?.addEventListener('click', handleInst
 document.getElementById('workspace-install-btn')?.addEventListener('click', handleInstallClick);
 
 // ---------------------------------------------------------
-// DATABASE INITIALIZATION
+// DATABASE INITIALIZATION 
 // ---------------------------------------------------------
 function initDB() {
     return new Promise((resolve, reject) => {
@@ -161,7 +161,7 @@ function lockScreen() { localStorage.removeItem("pos_active_session"); window.lo
 async function loginScreenSync() {
     const btn = document.getElementById("login-sync-btn");
     btn.disabled = true;
-    await syncMasterData(false); // Explicit non-silent mode
+    await syncMasterData(false); 
     btn.disabled = false;
 }
 
@@ -179,7 +179,6 @@ async function syncDataStore(storeName, dataArray) {
     });
 }
 
-// DITAMBAHKAN PARAMETER "isSilent" AGAR BISA BERJALAN DI LATAR BELAKANG
 async function syncMasterData(isSilent = false) {
     const statusText = document.getElementById("network-text");
     const loginStatus = document.getElementById("login-sync-status");
@@ -241,7 +240,7 @@ async function syncMasterData(isSilent = false) {
 }
 
 // ---------------------------------------------------------
-// DECENTRALIZED VOID AFTERMATH ENGINE
+// DECENTRALIZED VOID AFTERMATH ENGINE (WITH DRAWER REFUND)
 // ---------------------------------------------------------
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite");
@@ -269,6 +268,7 @@ function processVoidApprovals(authStatuses) {
             if (remote) {
                 if (remote.status === "Voided" && exp.status !== "Voided") {
                     exp.status = "Voided"; expStore.put(exp); uiNeedsRefresh = true;
+                    applyVoidAftermathExpense(exp); 
                 } else if (remote.status !== "Void Pending" && remote.status !== "Voided" && exp.status === "Void Pending") {
                     exp.status = remote.status; expStore.put(exp); uiNeedsRefresh = true;
                 }
@@ -277,6 +277,7 @@ function processVoidApprovals(authStatuses) {
         if (uiNeedsRefresh && !document.getElementById("history-modal").classList.contains("hidden")) renderHistoryList('expenses');
     };
 }
+
 function applyVoidAftermath(order) {
     let itemsToReturn = [];
     order.plates.forEach(p => p.items.forEach(i => itemsToReturn.push({ name: i.name, qty: i.qty })));
@@ -303,7 +304,13 @@ function applyVoidAftermath(order) {
     }
 
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, cashAmount: order.cashAmount || 0, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
+    }
+}
+
+function applyVoidAftermathExpense(exp) {
+    if (navigator.onLine) {
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermathExpense", data: { amount: exp.amount } }) }).catch(e => console.log(e));
     }
 }
 
@@ -457,9 +464,7 @@ function confirmAddTable() {
     }
     activeOrders.push({ name: `Meja ${tablePrefix}${nextTableNumber}`, customerName: name, customerPhone: phone || "Walk-in", plates: [{ plateId: 1, items: [] }] });
     nextTableNumber++; currentOrderIndex = activeOrders.length - 1; activePlateIndex = 0;
-    preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); 
-    // Trigger push immediately
-    runBackgroundSync();
+    preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
 }
 function loadSettingsForCart() {
     db.transaction(["settings"], "readonly").objectStore("settings").get("Tax_Rate_Percent").onsuccess = (e) => {
@@ -658,9 +663,7 @@ async function finalizePayment(shouldPrint) {
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
     closeReview(); activeOrders.splice(currentOrderIndex, 1);
     currentOrderIndex = 0; activePlateIndex = 0; 
-    preserveUnpaidTables(); renderCustomerTabs(); renderCartUI(); 
-    // Trigger push immediately
-    runBackgroundSync();
+    preserveUnpaidTables(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
 }
 async function getDynamicSettings() {
     return new Promise(res => {
@@ -712,7 +715,7 @@ async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeD
 }
 
 // ---------------------------------------------------------
-// CONTINUOUS DRAWER ENGINE (MONEY JOURNAL)
+// CONTINUOUS DRAWER ENGINE 
 // ---------------------------------------------------------
 function calculateLiveDrawer(callback) {
     let liveDrawer = window.masterDrawerBalance || 0; 
@@ -802,7 +805,7 @@ async function confirmAdminVoid() {
             db.transaction([storeName], "readwrite").objectStore(storeName).get(id).onsuccess = (ev) => {
                 const item = ev.target.result;
                 if (type === 'orders') { item.orderStatus = "Voided"; item.voidAuth = authName; applyVoidAftermath(item); } 
-                else { item.status = "Voided"; item.voidAuth = authName; }
+                else { item.status = "Voided"; item.voidAuth = authName; applyVoidAftermathExpense(item); }
                 item.syncStatus = "Pending"; db.transaction([storeName], "readwrite").objectStore(storeName).put(item); renderHistoryList(type);
             };
             
@@ -955,7 +958,6 @@ function submitCashDrop() {
         if (isLoggingOut) { 
             executeFinalLogout(leftInDrawer); 
         } else { 
-            // Trigger push immediately
             runBackgroundSync();
             alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
         }
@@ -1032,9 +1034,7 @@ function saveExpense() {
 
     const payload = { expenseId: "EXP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, category: category, description: document.getElementById("exp-desc").value || "-", amount: amount, status: "Active", syncStatus: "Pending" };
     db.transaction(["expenses"], "readwrite").objectStore("expenses").add(payload);
-    closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Tercatat!"); 
-    // Trigger push immediately
-    runBackgroundSync();
+    closeExpenseModal(); document.getElementById("exp-amount").value = ""; document.getElementById("exp-category").value = ""; document.getElementById("exp-desc").value = ""; alert("Pengeluaran Tercatat!"); runBackgroundSync();
 }
 function openSettings() { document.getElementById("settings-modal").classList.remove("hidden"); }
 function closeSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
@@ -1086,18 +1086,11 @@ async function runBackgroundSync() {
     }
 }
 
-// ---------------------------------------------------------
-// AUTO-SYNC TIMERS
-// ---------------------------------------------------------
 window.onload = async () => { 
     await initDB(); 
     await syncMasterData(false); 
     loadSettingsForCart(); 
     checkActiveSession(); 
-    
-    // 1. PUSH: Mengirim data ke Google Sheets setiap 15 detik (Background)
     window.setInterval(runBackgroundSync, 15000); 
-    
-    // 2. PULL: Menarik Menu/Harga baru dari Google Sheets secara diam-diam setiap 60 detik
     window.setInterval(() => syncMasterData(true), 60000); 
 };
