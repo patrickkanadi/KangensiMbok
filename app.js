@@ -664,22 +664,27 @@ async function finalizePayment(shouldPrint) {
         const ESC = '\x1B';
         const BOLD_ON = ESC + '\x45\x01';
         const BOLD_OFF = ESC + '\x45\x00';
+        const TEXT_NORMAL = ESC + '!\x00';
+        const TEXT_BIG = ESC + '!\x11'; // \x11 commands Double Width & Double Height
 
-        // --- SMART FORMATTING HELPERS (For 58mm / 32 Chars) ---
-        // Helper 1: Rata Tengah Pintar (Tidak memotong kata, tapi membungkusnya ke baris baru)
-        const centerWrap = (text) => {
+        const MAX_NORMAL = 32;
+        const MAX_BIG = 16;
+
+        // --- SMART FORMATTING HELPERS ---
+        // Helper 1: Auto-Centering (Adjusts limit based on big/small text)
+        const centerWrap = (text, isBig = false) => {
             if (!text) return "";
+            let maxChars = isBig ? MAX_BIG : MAX_NORMAL;
             let words = String(text).split(" ");
             let lines = [];
             let currentLine = "";
             
             words.forEach(word => {
-                if ((currentLine + word).length > 32) {
+                if ((currentLine + word).length > maxChars) {
                     if (currentLine) lines.push(currentLine.trim());
-                    // Jika satu kata lebih dari 32 karakter, potong paksa
-                    if (word.length > 32) {
-                        lines.push(word.substring(0, 32));
-                        currentLine = word.substring(32) + " ";
+                    if (word.length > maxChars) {
+                        lines.push(word.substring(0, maxChars));
+                        currentLine = word.substring(maxChars) + " ";
                     } else {
                         currentLine = word + " ";
                     }
@@ -690,24 +695,23 @@ async function finalizePayment(shouldPrint) {
             if (currentLine.trim()) lines.push(currentLine.trim());
             
             return lines.map(line => {
-                let pad = Math.floor((32 - line.length) / 2);
+                let pad = Math.floor((maxChars - line.length) / 2);
                 if (pad < 0) pad = 0;
                 return " ".repeat(pad) + line + "\n";
             }).join("");
         };
 
-        // Helper 2: Rata Kiri-Kanan (Item di kiri, Harga di kanan)
-        const formatLine = (leftText, rightText) => {
+        // Helper 2: Left-Right Alignment (Adjusts limit based on big/small text)
+        const formatLine = (leftText, rightText, isBig = false) => {
+            let maxChars = isBig ? MAX_BIG : MAX_NORMAL;
             let leftStr = String(leftText);
             let rightStr = String(rightText);
-            let spacesCount = 32 - leftStr.length - rightStr.length;
+            let spacesCount = maxChars - leftStr.length - rightStr.length;
             
             if (spacesCount > 0) {
-                // Muat di satu baris
                 return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
             } else {
-                // Jika teks terlalu panjang, taruh harga di baris baru rata kanan
-                let rightPad = 32 - rightStr.length;
+                let rightPad = maxChars - rightStr.length;
                 if(rightPad < 0) rightPad = 0;
                 return leftStr + "\n" + " ".repeat(rightPad) + rightStr + "\n";
             }
@@ -717,9 +721,10 @@ async function finalizePayment(shouldPrint) {
         let receiptText = "";
         
         // --- HEADER ---
-        receiptText += BOLD_ON + centerWrap(storeName) + BOLD_OFF;
-        receiptText += centerWrap(storeAddress);
-        receiptText += centerWrap(new Date().toLocaleString('id-ID'));
+        // Big & Bold Store Name, followed by a reset to Normal text
+        receiptText += TEXT_BIG + BOLD_ON + centerWrap(storeName, true) + BOLD_OFF + TEXT_NORMAL;
+        receiptText += centerWrap(storeAddress, false);
+        receiptText += centerWrap(new Date().toLocaleString('id-ID'), false);
         receiptText += "--------------------------------\n";
         receiptText += `Pesanan:   ${orderId}\n`;
         receiptText += `Meja:      ${currentOrder.name}\n`;
@@ -730,40 +735,40 @@ async function finalizePayment(shouldPrint) {
         // --- ITEMS ---
         currentOrder.plates.forEach(plate => {
             if(plate.items.length > 0) {
-                // Cetak tebal untuk tulisan Piring
                 receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
                 
                 plate.items.forEach(item => {
                     let itemName = `${item.qty}x ${item.name}`;
                     let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID');
-                    receiptText += formatLine(itemName, itemPrice);
+                    receiptText += formatLine(itemName, itemPrice, false);
                 });
             }
         });
         
         // --- TOTALS ---
         receiptText += "--------------------------------\n";
-        receiptText += formatLine("Subtotal:", "Rp " + totals.baseSubtotal.toLocaleString('id-ID'));
+        receiptText += formatLine("Subtotal:", "Rp " + totals.baseSubtotal.toLocaleString('id-ID'), false);
         
         if (totals.totalSavings > 0) {
-            receiptText += formatLine("Total Diskon:", "-Rp " + totals.totalSavings.toLocaleString('id-ID'));
+            receiptText += formatLine("Total Diskon:", "-Rp " + totals.totalSavings.toLocaleString('id-ID'), false);
         }
         
-        receiptText += formatLine("Pajak:", "Rp " + totals.taxAmount.toLocaleString('id-ID'));
+        // Note: Pajak has been entirely removed here.
+        
         receiptText += "--------------------------------\n";
         
-        // Cetak tebal untuk Grand Total
-        receiptText += BOLD_ON + formatLine("TOTAL:", "Rp " + totals.grandTotal.toLocaleString('id-ID')) + BOLD_OFF;
+        // Big & Bold Grand Total
+        receiptText += TEXT_BIG + BOLD_ON + formatLine("TOTAL:", "Rp " + totals.grandTotal.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
         
-        if (cashPaid > 0) receiptText += formatLine("Tunai:", "Rp " + cashPaid.toLocaleString('id-ID'));
-        if (qrisPaid > 0) receiptText += formatLine("QRIS:", "Rp " + qrisPaid.toLocaleString('id-ID'));
-        if (changeDue > 0) receiptText += formatLine("Kembali:", "Rp " + changeDue.toLocaleString('id-ID'));
+        if (cashPaid > 0) receiptText += formatLine("Tunai:", "Rp " + cashPaid.toLocaleString('id-ID'), false);
+        if (qrisPaid > 0) receiptText += formatLine("QRIS:", "Rp " + qrisPaid.toLocaleString('id-ID'), false);
+        if (changeDue > 0) receiptText += formatLine("Kembali:", "Rp " + changeDue.toLocaleString('id-ID'), false);
         
         // --- FOOTERS ---
         receiptText += "--------------------------------\n";
-        receiptText += centerWrap(footer1);
-        if (footer2) receiptText += centerWrap(footer2);
-        if (footer3) receiptText += centerWrap(footer3);
+        receiptText += TEXT_BIG + BOLD_ON + centerWrap(footer1, true) + BOLD_OFF + TEXT_NORMAL;
+        if (footer2) receiptText += centerWrap(footer2, false);
+        if (footer3) receiptText += centerWrap(footer3, false);
         receiptText += "\n\n\n\n"; // Final push to clear the tear bar
 
         // 4. FIRE TO BLUETOOTH ENGINE
@@ -805,7 +810,6 @@ async function finalizePayment(shouldPrint) {
     renderCartUI(); 
     runBackgroundSync();
 }
-
 // ---------------------------------------------------------
 // CONTINUOUS DRAWER ENGINE 
 // ---------------------------------------------------------
