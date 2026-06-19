@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 28; 
+const DB_VERSION = 29; // INI AKAN ME-RESET DATABASE LOKAL OTOMATIS SAAT REFRESH
 let db;
 
 let currentCategory = ""; 
@@ -110,12 +110,10 @@ async function attemptLogin() {
     const pinInput = String(document.getElementById("cashier-pin").value).trim();
     if (!pinInput) return alert("Harap masukkan PIN");
 
-    // 1. Hash input kasir
     const hashedInput = await sha256(pinInput);
     const loginBtn = document.querySelector("#login-screen button");
     const statusText = document.getElementById("login-sync-status");
 
-    // Helper untuk mengambil data staf dari IndexedDB
     const getStaffData = () => new Promise(res => {
         db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = e => res(e.target.result);
     });
@@ -123,27 +121,19 @@ async function attemptLogin() {
     try {
         loginBtn.disabled = true;
 
-        // 2. Cek memori lokal terlebih dahulu
         let staffList = await getStaffData();
         let staffMember = staffList.find(s => String(s.pin) === hashedInput);
 
-        // 3. JIKA PIN TIDAK DITEMUKAN (Memori kosong atau PIN baru) -> SINKRON OTOMATIS
         if (!staffMember) {
-            statusText.innerText = "Mencari PIN di server... ⏳";
-            
-            // Tarik data terbaru dari server secara diam-diam
+            statusText.innerText = "Mencari data di server... ⏳";
             await syncMasterData(true); 
-            
-            // Cek ulang memori setelah sinkronisasi selesai
             staffList = await getStaffData();
             staffMember = staffList.find(s => String(s.pin) === hashedInput);
-            
             statusText.innerText = "";
         }
 
         loginBtn.disabled = false;
 
-        // 4. HASIL AKHIR LOGIKA LOGIN
         if (staffMember) {
             db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
                 let sessionData;
@@ -157,7 +147,7 @@ async function attemptLogin() {
                 loadSessionData(sessionData);
             };
         } else { 
-            alert(`PIN salah atau tidak ditemukan. Pastikan Anda memiliki koneksi internet jika ini adalah PIN baru.`); 
+            alert(`PIN salah atau tidak ditemukan. Pastikan koneksi internet aktif.`); 
             document.getElementById("cashier-pin").value = ""; 
         }
     } catch(err) {
@@ -165,6 +155,32 @@ async function attemptLogin() {
         alert("Database belum siap. Harap muat ulang halaman.");
     }
 }
+
+document.addEventListener("DOMContentLoaded", () => {
+    const pinField = document.getElementById("cashier-pin");
+    if(pinField) {
+        pinField.addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                attemptLogin();
+            }
+        });
+    }
+});
+
+function checkActiveSession() {
+    const savedSession = localStorage.getItem("pos_active_session");
+    if (savedSession) { loadSessionData(JSON.parse(savedSession)); }
+}
+function loadSessionData(session) {
+    currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
+    document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
+    document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("cashier-pin").value = "";
+    document.getElementById("shift-login-indicator").innerText = `Waktu Masuk: ${new Date(currentLoginTime).toLocaleTimeString('id-ID')}`;
+    
+    restoreUnpaidTables(); loadMenuUI(); initTabs(); 
+}
+function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
 // SILENT MASTER DATA SYNC
@@ -661,7 +677,6 @@ async function finalizePayment(shouldPrint) {
     if (shouldPrint) { 
         const settings = await getDynamicSettings();
         
-        // --- ESC/POS HARDWARE COMMANDS ---
         const ESC = '\x1B';
         const ALIGN_LEFT = ESC + '\x61\x00';
         const ALIGN_CENTER = ESC + '\x61\x01';
@@ -670,7 +685,6 @@ async function finalizePayment(shouldPrint) {
         const TEXT_BIG = ESC + '!\x11'; 
         const TEXT_NORMAL = ESC + '!\x00';
 
-        // Helper: Teks Rata Kiri & Kanan (Auto Hitung Spasi)
         const formatLine = (leftText, rightText, isBig = false) => {
             let maxChars = isBig ? 16 : 32;
             let leftStr = String(leftText);
@@ -687,14 +701,12 @@ async function finalizePayment(shouldPrint) {
 
         let receiptText = "";
         
-        // --- HEADER (RATA TENGAH ASLI) ---
         receiptText += ALIGN_CENTER;
         receiptText += TEXT_BIG + BOLD_ON + (settings["Store_Name"] || "KSB POS") + "\n" + BOLD_OFF + TEXT_NORMAL;
         receiptText += (settings["Store_Address"] || "Surabaya") + "\n";
         receiptText += new Date().toLocaleString('id-ID') + "\n";
         receiptText += "--------------------------------\n";
         
-        // --- DETAILS (RATA KIRI) ---
         receiptText += ALIGN_LEFT;
         receiptText += `Pesanan:   ${orderId}\n`;
         receiptText += `Meja:      ${currentOrder.name}\n`;
@@ -702,20 +714,17 @@ async function finalizePayment(shouldPrint) {
         receiptText += `Kasir:     ${currentCashier}\n`;
         receiptText += "--------------------------------\n";
         
-        // --- ITEMS ---
         currentOrder.plates.forEach(plate => {
             if(plate.items.length > 0) {
                 receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
                 plate.items.forEach(item => {
                     let itemName = `${item.qty}x ${item.name}`;
-                    // Menghilangkan 'Rp' di harga item agar pas dengan contoh struk
                     let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
                     receiptText += formatLine(itemName, itemPrice, false);
                 });
             }
         });
         
-        // --- TOTALS ---
         receiptText += "--------------------------------\n";
         receiptText += formatLine("Subtotal:", "Rp " + totals.baseSubtotal.toLocaleString('id-ID'), false);
         
@@ -724,29 +733,25 @@ async function finalizePayment(shouldPrint) {
         }
         
         receiptText += "--------------------------------\n";
-        // Cetak Besar dan Tebal, pas kiri kanan
         receiptText += TEXT_BIG + BOLD_ON + formatLine("TOTAL:", "Rp " + totals.grandTotal.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
         
         if (cashPaid > 0) receiptText += formatLine("Tunai:", "Rp " + cashPaid.toLocaleString('id-ID'), false);
         if (qrisPaid > 0) receiptText += formatLine("QRIS:", "Rp " + qrisPaid.toLocaleString('id-ID'), false);
         if (changeDue > 0) receiptText += formatLine("Kembali:", "Rp " + changeDue.toLocaleString('id-ID'), false);
         
-        // --- FOOTERS (RATA TENGAH ASLI) ---
         receiptText += "--------------------------------\n";
         receiptText += ALIGN_CENTER;
         receiptText += TEXT_BIG + BOLD_ON + (settings["Footer_1"] || "TERIMA KASIH!") + "\n" + BOLD_OFF + TEXT_NORMAL;
         if (settings["Footer_2"]) receiptText += settings["Footer_2"] + "\n";
         if (settings["Footer_3"]) receiptText += settings["Footer_3"] + "\n";
-        receiptText += "\n\n\n\n"; // Final push to clear the tear bar
+        receiptText += "\n\n\n\n"; 
 
-        // 4. FIRE TO BLUETOOTH ENGINE
         await printToBluetooth(receiptText);
         
     } else if (changeDue > 0) { 
         alert(`Pembayaran Berhasil!\nKembalian: Rp ${changeDue.toLocaleString('id-ID')}`); 
     }
 
-    // --- DATA SAVING & SYNCING LOGIC ---
     const orderPayload = {
         orderId: orderId, timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, tablePrefix: currentOrder.name,
         customerName: currentOrder.customerName, customerPhone: currentOrder.customerPhone, orderStatus: finalStatus, syncStatus: "Pending", voidAuth: "N/A", 
