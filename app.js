@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 26; 
+const DB_VERSION = 28; 
 let db;
 
 let currentCategory = ""; 
@@ -25,6 +25,16 @@ window.masterDrawerBalance = 0;
 window.currentReviewTotals = { baseSubtotal: 0, effectiveSubtotal: 0, totalSavings: 0, promoDiscount: 0, promoName: "", taxAmount: 0, grandTotal: 0 };
 window.currentShiftData = {}; 
 let isLoggingOut = false; 
+
+// ============================================================================
+// 🔒 MESIN ENKRIPSI PIN (SHA-256)
+// ============================================================================
+async function sha256(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 // ---------------------------------------------------------
 // PWA INSTALL PROMPT
@@ -94,69 +104,70 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT 
+// LOGIN & SESSION MANAGEMENT (AUTO-SYNC ON FAIL)
 // ---------------------------------------------------------
-function attemptLogin() {
+async function attemptLogin() {
     const pinInput = String(document.getElementById("cashier-pin").value).trim();
     if (!pinInput) return alert("Harap masukkan PIN");
 
+    // 1. Hash input kasir
+    const hashedInput = await sha256(pinInput);
+    const loginBtn = document.querySelector("#login-screen button");
+    const statusText = document.getElementById("login-sync-status");
+
+    // Helper untuk mengambil data staf dari IndexedDB
+    const getStaffData = () => new Promise(res => {
+        db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = e => res(e.target.result);
+    });
+
     try {
-        db.transaction(["staff"], "readonly").objectStore("staff").getAll().onsuccess = (e) => {
-            const staffList = e.target.result;
-            const staffMember = staffList.find(s => String(s.pin).trim() === pinInput);
+        loginBtn.disabled = true;
 
-            if (staffMember) {
-                db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
-                    let sessionData;
-                    if (shiftRes.target.result) {
-                        sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
-                    } else {
-                        sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
-                        db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime });
-                    }
-                    localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
-                    loadSessionData(sessionData);
-                };
-            } else { 
-                let memoryDump = staffList.map(s => `[${s.pin}] - ${s.name}`).join("\n");
-                if (!memoryDump) memoryDump = "KOSONG! Data belum terunduh.";
-                alert(`PIN "${pinInput}" gagal.\n\nMemori tablet saat ini berisi:\n---------------------\n${memoryDump}\n---------------------\nJika memori kosong, klik Sinkronisasi Database!`); 
-                document.getElementById("cashier-pin").value = ""; 
-            }
-        };
+        // 2. Cek memori lokal terlebih dahulu
+        let staffList = await getStaffData();
+        let staffMember = staffList.find(s => String(s.pin) === hashedInput);
+
+        // 3. JIKA PIN TIDAK DITEMUKAN (Memori kosong atau PIN baru) -> SINKRON OTOMATIS
+        if (!staffMember) {
+            statusText.innerText = "Mencari PIN di server... ⏳";
+            
+            // Tarik data terbaru dari server secara diam-diam
+            await syncMasterData(true); 
+            
+            // Cek ulang memori setelah sinkronisasi selesai
+            staffList = await getStaffData();
+            staffMember = staffList.find(s => String(s.pin) === hashedInput);
+            
+            statusText.innerText = "";
+        }
+
+        loginBtn.disabled = false;
+
+        // 4. HASIL AKHIR LOGIKA LOGIN
+        if (staffMember) {
+            db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
+                let sessionData;
+                if (shiftRes.target.result) {
+                    sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
+                } else {
+                    sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
+                    db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime });
+                }
+                localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
+                loadSessionData(sessionData);
+            };
+        } else { 
+            alert(`PIN salah atau tidak ditemukan. Pastikan Anda memiliki koneksi internet jika ini adalah PIN baru.`); 
+            document.getElementById("cashier-pin").value = ""; 
+        }
     } catch(err) {
-        alert("Database belum siap. Harap klik Sinkronisasi Database.");
+        loginBtn.disabled = false;
+        alert("Database belum siap. Harap muat ulang halaman.");
     }
 }
-
-document.addEventListener("DOMContentLoaded", () => {
-    const pinField = document.getElementById("cashier-pin");
-    if(pinField) {
-        pinField.addEventListener("keypress", function(event) {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                attemptLogin();
-            }
-        });
-    }
-});
-
-function checkActiveSession() {
-    const savedSession = localStorage.getItem("pos_active_session");
-    if (savedSession) { loadSessionData(JSON.parse(savedSession)); }
-}
-function loadSessionData(session) {
-    currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
-    document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
-    document.getElementById("display-cashier").innerText = currentCashier; document.getElementById("cashier-pin").value = "";
-    document.getElementById("shift-login-indicator").innerText = `Waktu Masuk: ${new Date(currentLoginTime).toLocaleTimeString('id-ID')}`;
-    
-    restoreUnpaidTables(); loadMenuUI(); initTabs(); 
-}
-function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
-// SILENT MASTER DATA SYNC (AUTO-PULL)
+// SILENT MASTER DATA SYNC
 // ---------------------------------------------------------
 async function loginScreenSync() {
     const btn = document.getElementById("login-sync-btn");
@@ -327,11 +338,7 @@ function loadMenuUI() {
         }
         
         const categories = [...new Set(globalMenuData.map(item => item.category))].filter(Boolean);
-        if(categories.length > 0) {
-            currentCategory = categories[0]; 
-        } else {
-            currentCategory = "Uncategorized";
-        }
+        if(categories.length > 0) { currentCategory = categories[0]; } else { currentCategory = "Uncategorized"; }
 
         const tabsContainer = document.getElementById("category-container"); tabsContainer.innerHTML = ""; 
         categories.forEach((cat) => {
@@ -625,9 +632,9 @@ function autoFillPayment(source) {
 }
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
 
-// ---------------------------------------------------------
+// ============================================================================
 // 🚀 FINALIZE PAYMENT & DYNAMIC BLUETOOTH PRINT
-// ---------------------------------------------------------
+// ============================================================================
 async function getDynamicSettings() {
     return new Promise(res => {
         let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll();
@@ -652,80 +659,43 @@ async function finalizePayment(shouldPrint) {
     const finalStatus = shouldPrint ? "Paid" : "Paid but not printed";
 
     if (shouldPrint) { 
-        // 1. PULL DYNAMIC SETTINGS
         const settings = await getDynamicSettings();
-        const storeName = settings["Store_Name"] || "KSB POS"; 
-        const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
-        const footer1 = settings["Footer_1"] || "TERIMA KASIH!"; 
-        const footer2 = settings["Footer_2"] || "Silakan datang kembali"; 
-        const footer3 = settings["Footer_3"] || ""; 
-
+        
         // --- ESC/POS HARDWARE COMMANDS ---
         const ESC = '\x1B';
+        const ALIGN_LEFT = ESC + '\x61\x00';
+        const ALIGN_CENTER = ESC + '\x61\x01';
         const BOLD_ON = ESC + '\x45\x01';
         const BOLD_OFF = ESC + '\x45\x00';
+        const TEXT_BIG = ESC + '!\x11'; 
         const TEXT_NORMAL = ESC + '!\x00';
-        const TEXT_BIG = ESC + '!\x11'; // \x11 commands Double Width & Double Height
 
-        const MAX_NORMAL = 32;
-        const MAX_BIG = 16;
-
-        // --- SMART FORMATTING HELPERS ---
-        // Helper 1: Auto-Centering (Adjusts limit based on big/small text)
-        const centerWrap = (text, isBig = false) => {
-            if (!text) return "";
-            let maxChars = isBig ? MAX_BIG : MAX_NORMAL;
-            let words = String(text).split(" ");
-            let lines = [];
-            let currentLine = "";
-            
-            words.forEach(word => {
-                if ((currentLine + word).length > maxChars) {
-                    if (currentLine) lines.push(currentLine.trim());
-                    if (word.length > maxChars) {
-                        lines.push(word.substring(0, maxChars));
-                        currentLine = word.substring(maxChars) + " ";
-                    } else {
-                        currentLine = word + " ";
-                    }
-                } else {
-                    currentLine += word + " ";
-                }
-            });
-            if (currentLine.trim()) lines.push(currentLine.trim());
-            
-            return lines.map(line => {
-                let pad = Math.floor((maxChars - line.length) / 2);
-                if (pad < 0) pad = 0;
-                return " ".repeat(pad) + line + "\n";
-            }).join("");
-        };
-
-        // Helper 2: Left-Right Alignment (Adjusts limit based on big/small text)
+        // Helper: Teks Rata Kiri & Kanan (Auto Hitung Spasi)
         const formatLine = (leftText, rightText, isBig = false) => {
-            let maxChars = isBig ? MAX_BIG : MAX_NORMAL;
+            let maxChars = isBig ? 16 : 32;
             let leftStr = String(leftText);
             let rightStr = String(rightText);
-            let spacesCount = maxChars - leftStr.length - rightStr.length;
             
-            if (spacesCount > 0) {
-                return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
-            } else {
+            if (leftStr.length + rightStr.length > maxChars) {
                 let rightPad = maxChars - rightStr.length;
-                if(rightPad < 0) rightPad = 0;
-                return leftStr + "\n" + " ".repeat(rightPad) + rightStr + "\n";
+                return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
+            } else {
+                let spacesCount = maxChars - leftStr.length - rightStr.length;
+                return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
             }
         };
 
-        // 3. BUILD THE RECEIPT TEXT
         let receiptText = "";
         
-        // --- HEADER ---
-        // Big & Bold Store Name, followed by a reset to Normal text
-        receiptText += TEXT_BIG + BOLD_ON + centerWrap(storeName, true) + BOLD_OFF + TEXT_NORMAL;
-        receiptText += centerWrap(storeAddress, false);
-        receiptText += centerWrap(new Date().toLocaleString('id-ID'), false);
+        // --- HEADER (RATA TENGAH ASLI) ---
+        receiptText += ALIGN_CENTER;
+        receiptText += TEXT_BIG + BOLD_ON + (settings["Store_Name"] || "KSB POS") + "\n" + BOLD_OFF + TEXT_NORMAL;
+        receiptText += (settings["Store_Address"] || "Surabaya") + "\n";
+        receiptText += new Date().toLocaleString('id-ID') + "\n";
         receiptText += "--------------------------------\n";
+        
+        // --- DETAILS (RATA KIRI) ---
+        receiptText += ALIGN_LEFT;
         receiptText += `Pesanan:   ${orderId}\n`;
         receiptText += `Meja:      ${currentOrder.name}\n`;
         receiptText += `Pelanggan: ${currentOrder.customerName || "Walk-in"}\n`;
@@ -736,10 +706,10 @@ async function finalizePayment(shouldPrint) {
         currentOrder.plates.forEach(plate => {
             if(plate.items.length > 0) {
                 receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
-                
                 plate.items.forEach(item => {
                     let itemName = `${item.qty}x ${item.name}`;
-                    let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID');
+                    // Menghilangkan 'Rp' di harga item agar pas dengan contoh struk
+                    let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
                     receiptText += formatLine(itemName, itemPrice, false);
                 });
             }
@@ -753,22 +723,20 @@ async function finalizePayment(shouldPrint) {
             receiptText += formatLine("Total Diskon:", "-Rp " + totals.totalSavings.toLocaleString('id-ID'), false);
         }
         
-        // Note: Pajak has been entirely removed here.
-        
         receiptText += "--------------------------------\n";
-        
-        // Big & Bold Grand Total
+        // Cetak Besar dan Tebal, pas kiri kanan
         receiptText += TEXT_BIG + BOLD_ON + formatLine("TOTAL:", "Rp " + totals.grandTotal.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
         
         if (cashPaid > 0) receiptText += formatLine("Tunai:", "Rp " + cashPaid.toLocaleString('id-ID'), false);
         if (qrisPaid > 0) receiptText += formatLine("QRIS:", "Rp " + qrisPaid.toLocaleString('id-ID'), false);
         if (changeDue > 0) receiptText += formatLine("Kembali:", "Rp " + changeDue.toLocaleString('id-ID'), false);
         
-        // --- FOOTERS ---
+        // --- FOOTERS (RATA TENGAH ASLI) ---
         receiptText += "--------------------------------\n";
-        receiptText += TEXT_BIG + BOLD_ON + centerWrap(footer1, true) + BOLD_OFF + TEXT_NORMAL;
-        if (footer2) receiptText += centerWrap(footer2, false);
-        if (footer3) receiptText += centerWrap(footer3, false);
+        receiptText += ALIGN_CENTER;
+        receiptText += TEXT_BIG + BOLD_ON + (settings["Footer_1"] || "TERIMA KASIH!") + "\n" + BOLD_OFF + TEXT_NORMAL;
+        if (settings["Footer_2"]) receiptText += settings["Footer_2"] + "\n";
+        if (settings["Footer_3"]) receiptText += settings["Footer_3"] + "\n";
         receiptText += "\n\n\n\n"; // Final push to clear the tear bar
 
         // 4. FIRE TO BLUETOOTH ENGINE
@@ -810,6 +778,7 @@ async function finalizePayment(shouldPrint) {
     renderCartUI(); 
     runBackgroundSync();
 }
+
 // ---------------------------------------------------------
 // CONTINUOUS DRAWER ENGINE 
 // ---------------------------------------------------------
@@ -830,7 +799,7 @@ function calculateLiveDrawer(callback) {
 }
 
 // ---------------------------------------------------------
-// HISTORY & VOIDS
+// HISTORY & VOIDS (DENGAN HASHING PIN ADMIN)
 // ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
@@ -887,12 +856,19 @@ function submitRemoteVoid() {
     db.transaction(["void_requests"], "readwrite").objectStore("void_requests").add({ id: id, type: type, status: "Void Pending", authName: "Waiting" });
     closeAdminVoidModal(); runBackgroundSync();
 }
+
 async function confirmAdminVoid() {
-    const pin = document.getElementById("admin-void-pin").value; if (!pin) return alert("Harap masukkan PIN.");
-    const settings = await getDynamicSettings(); const masterPin = String(settings["Master_PIN"]); const isMaster = (pin === masterPin);
+    const pinInput = document.getElementById("admin-void-pin").value; 
+    if (!pinInput) return alert("Harap masukkan PIN.");
     
-    db.transaction(["staff"], "readonly").objectStore("staff").get(pin).onsuccess = (e) => {
-        const staff = e.target.result; const isAdmin = (staff && staff.role.toLowerCase() === 'admin');
+    const hashedInput = await sha256(String(pinInput).trim());
+    const settings = await getDynamicSettings(); 
+    const masterPinHash = String(settings["Master_PIN"]); 
+    const isMaster = (hashedInput === masterPinHash);
+    
+    db.transaction(["staff"], "readonly").objectStore("staff").get(hashedInput).onsuccess = (e) => {
+        const staff = e.target.result; 
+        const isAdmin = (staff && staff.role.toLowerCase() === 'admin');
 
         if (isMaster || isAdmin) {
             const authName = isMaster ? "Admin Utama" : staff.name;
@@ -923,9 +899,7 @@ function viewPastShift(shiftId) {
                 if(!s) return;
                 populateShiftModal(s, true);
             };
-        } else {
-            populateShiftModal(s, true);
-        }
+        } else { populateShiftModal(s, true); }
     };
 }
 
@@ -981,10 +955,7 @@ function openShiftReport() {
 
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 
-function initiateLogoutSequence() { 
-    document.getElementById("shift-report-modal").classList.add("hidden"); 
-    openCashDrop(true); 
-}
+function initiateLogoutSequence() { document.getElementById("shift-report-modal").classList.add("hidden"); openCashDrop(true); }
 
 function openCashDrop(forLogout = false) {
     isLoggingOut = forLogout;
@@ -1000,10 +971,7 @@ function openCashDrop(forLogout = false) {
     });
 }
 
-function closeCashDrop() { 
-    document.getElementById("cash-drop-modal").classList.add("hidden"); 
-    isLoggingOut = false; 
-}
+function closeCashDrop() { document.getElementById("cash-drop-modal").classList.add("hidden"); isLoggingOut = false; }
 
 function submitCashDrop() {
     const adminAmt = Number(document.getElementById("drop-admin").value) || 0;
@@ -1024,13 +992,11 @@ function submitCashDrop() {
         if (isLoggingOut) { 
             executeFinalLogout(leftInDrawer); 
         } else { 
-            runBackgroundSync();
-            alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+            runBackgroundSync(); alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
         }
     });
 }
 
-// 5. The Bulletproof Execution Engine
 async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData || {};
     const shiftPayload = {
@@ -1043,8 +1009,7 @@ async function executeFinalLogout(netCash) {
 
     const statusText = document.getElementById("network-text");
     if(statusText) statusText.innerText = "LOGOUT... ⏳";
-    document.body.style.pointerEvents = "none"; 
-    document.body.style.opacity = "0.7";
+    document.body.style.pointerEvents = "none"; document.body.style.opacity = "0.7";
 
     try {
         const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
@@ -1061,26 +1026,18 @@ async function executeFinalLogout(netCash) {
 
             try {
                 const response = await fetch(API_URL, { 
-                    method: "POST", 
-                    body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }),
-                    signal: controller.signal
+                    method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }), signal: controller.signal
                 });
                 clearTimeout(timeoutId);
                 const json = await response.json();
-                
                 if (json.status === "Success") {
                     const tx2 = db.transaction(["shift_reports"], "readwrite");
                     tx2.objectStore("shift_reports").delete(shiftPayload.shiftId);
                 }
-            } catch (netError) {
-                console.warn("Network delayed or offline. Data safely stored locally.");
-            }
+            } catch (netError) { console.warn("Network delayed or offline. Data safely stored locally."); }
         }
-    } catch (fatalError) {
-        console.error("Local database error during logout.", fatalError);
-    } finally {
-        window.location.reload(); 
-    }
+    } catch (fatalError) { console.error("Local database error during logout.", fatalError); } 
+    finally { window.location.reload(); }
 }
 
 // ---------------------------------------------------------
