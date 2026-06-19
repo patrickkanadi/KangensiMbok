@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 25; 
+const DB_VERSION = 26; 
 let db;
 
 let currentCategory = ""; 
@@ -240,7 +240,7 @@ async function syncMasterData(isSilent = false) {
 }
 
 // ---------------------------------------------------------
-// DECENTRALIZED VOID AFTERMATH ENGINE (WITH DRAWER REFUND)
+// DECENTRALIZED VOID AFTERMATH ENGINE 
 // ---------------------------------------------------------
 function processVoidApprovals(authStatuses) {
     const tx = db.transaction(["orders", "expenses"], "readwrite");
@@ -464,7 +464,8 @@ function confirmAddTable() {
     }
     activeOrders.push({ name: `Meja ${tablePrefix}${nextTableNumber}`, customerName: name, customerPhone: phone || "Walk-in", plates: [{ plateId: 1, items: [] }] });
     nextTableNumber++; currentOrderIndex = activeOrders.length - 1; activePlateIndex = 0;
-    preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
+    preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); 
+    runBackgroundSync();
 }
 function loadSettingsForCart() {
     db.transaction(["settings"], "readonly").objectStore("settings").get("Tax_Rate_Percent").onsuccess = (e) => {
@@ -624,22 +625,99 @@ function autoFillPayment(source) {
 }
 function closeReview() { document.getElementById("review-modal").classList.add("hidden"); }
 
-// INSTANT PAYMENT & LOCAL STOCK DEDUCTION
+// ---------------------------------------------------------
+// 🚀 FINALIZE PAYMENT & DYNAMIC BLUETOOTH PRINT
+// ---------------------------------------------------------
+async function getDynamicSettings() {
+    return new Promise(res => {
+        let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll();
+        req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); };
+    });
+}
+
 async function finalizePayment(shouldPrint) {
     const cashPaid = Number(document.getElementById("pay-cash").value);
     const qrisPaid = Number(document.getElementById("pay-qris").value);
     const currentOrder = activeOrders[currentOrderIndex];
     const totals = window.currentReviewTotals;
 
-    const totalPaid = cashPaid + qrisPaid; const changeDue = totalPaid - totals.grandTotal;
+    const totalPaid = cashPaid + qrisPaid; 
+    const changeDue = totalPaid - totals.grandTotal;
 
-    if (totalPaid < totals.grandTotal) if (!confirm("Peringatan: Jumlah yang dibayar kurang dari Total Keseluruhan. Tetap lanjutkan?")) return;
+    if (totalPaid < totals.grandTotal) {
+        if (!confirm("Peringatan: Jumlah yang dibayar kurang dari Total Keseluruhan. Tetap lanjutkan?")) return;
+    }
+    
     const orderId = "ORD-" + Date.now();
     const finalStatus = shouldPrint ? "Paid" : "Paid but not printed";
 
-    if (shouldPrint) { await buildPrintableReceipt(orderId, currentOrder, totals, cashPaid, qrisPaid, changeDue); window.print(); } 
-    else if (changeDue > 0) { alert(`Pembayaran Berhasil!\nKembalian: Rp ${changeDue.toLocaleString('id-ID')}`); }
+    if (shouldPrint) { 
+        // 1. PULL DYNAMIC SETTINGS FROM LOCAL DATABASE
+        const settings = await getDynamicSettings();
+        const storeName = settings["Store_Name"] || "KSB POS"; 
+        const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
+        const footer1 = settings["Footer_1"] || "TERIMA KASIH!"; 
+        const footer2 = settings["Footer_2"] || "Silakan datang kembali"; 
+        const footer3 = settings["Footer_3"] || ""; 
 
+        // 2. SMART CENTERING HELPER (For 58mm Printers = 32 characters max)
+        const centerText = (text) => {
+            if (!text) return "";
+            let str = String(text).trim();
+            if (str.length >= 32) return str.substring(0, 32) + "\n";
+            let pad = Math.floor((32 - str.length) / 2);
+            return " ".repeat(pad) + str + "\n";
+        };
+
+        // 3. BUILD THE DYNAMIC RECEIPT STRING
+        let receiptText = centerText(storeName);
+        receiptText += centerText(storeAddress);
+        receiptText += "--------------------------------\n";
+        receiptText += `Pesanan: ${orderId}\n`;
+        receiptText += `Meja:    ${currentOrder.name}\n`;
+        receiptText += `Kasir:   ${currentCashier}\n`;
+        receiptText += "--------------------------------\n";
+        
+        currentOrder.plates.forEach(plate => {
+            if(plate.items.length > 0) {
+                plate.items.forEach(item => {
+                    let lineTotal = item.qty * item.originalPrice;
+                    receiptText += `${item.qty}x ${item.name}\n`;
+                    // Manual right-alignment pad for prices
+                    let priceStr = `Rp ${lineTotal.toLocaleString('id-ID')}`;
+                    let padLen = 32 - priceStr.length;
+                    if(padLen < 0) padLen = 0;
+                    receiptText += " ".repeat(padLen) + priceStr + "\n"; 
+                });
+            }
+        });
+        
+        receiptText += "--------------------------------\n";
+        receiptText += `SUBTOTAL:        Rp ${totals.baseSubtotal.toLocaleString('id-ID')}\n`;
+        if (totals.totalSavings > 0) {
+            receiptText += `DISKON:         -Rp ${totals.totalSavings.toLocaleString('id-ID')}\n`;
+        }
+        receiptText += `PAJAK:           Rp ${totals.taxAmount.toLocaleString('id-ID')}\n`;
+        receiptText += "--------------------------------\n";
+        receiptText += `TOTAL:           Rp ${totals.grandTotal.toLocaleString('id-ID')}\n`;
+        receiptText += `TUNAI:           Rp ${cashPaid.toLocaleString('id-ID')}\n`;
+        receiptText += `KEMBALI:         Rp ${changeDue.toLocaleString('id-ID')}\n`;
+        receiptText += "--------------------------------\n";
+        
+        // 4. INJECT DYNAMIC FOOTERS
+        receiptText += centerText(footer1);
+        if (footer2) receiptText += centerText(footer2);
+        if (footer3) receiptText += centerText(footer3);
+        receiptText += "\n\n\n\n"; // Final push to clear the tear bar
+
+        // 5. FIRE TO BLUETOOTH ENGINE
+        await printToBluetooth(receiptText);
+        
+    } else if (changeDue > 0) { 
+        alert(`Pembayaran Berhasil!\nKembalian: Rp ${changeDue.toLocaleString('id-ID')}`); 
+    }
+
+    // --- DATA SAVING & SYNCING LOGIC ---
     const orderPayload = {
         orderId: orderId, timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId, tablePrefix: currentOrder.name,
         customerName: currentOrder.customerName, customerPhone: currentOrder.customerPhone, orderStatus: finalStatus, syncStatus: "Pending", voidAuth: "N/A", 
@@ -658,60 +736,18 @@ async function finalizePayment(shouldPrint) {
             }
         };
     }));
+    
     txMenu.oncomplete = () => { renderProductGrid(); };
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
-    closeReview(); activeOrders.splice(currentOrderIndex, 1);
-    currentOrderIndex = 0; activePlateIndex = 0; 
-    preserveUnpaidTables(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
-}
-async function getDynamicSettings() {
-    return new Promise(res => {
-        let req = db.transaction(["settings"], "readonly").objectStore("settings").getAll();
-        req.onsuccess = e => { let s = {}; e.target.result.forEach(row => s[row.key] = row.value); res(s); };
-    });
-}
-async function buildPrintableReceipt(orderId, order, totals, cash, qris, changeDue) {
-    const settings = await getDynamicSettings();
-    const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
-    const footer1 = settings["Footer_1"] || "TERIMA KASIH!"; const footer2 = settings["Footer_2"] || "Silakan datang kembali"; const footer3 = settings["Footer_3"] || ""; 
-    const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
-    
-    let itemsHtml = "";
-    order.plates.forEach(plate => {
-        if(plate.items.length > 0) {
-            itemsHtml += `<div style="font-weight:bold; margin-top:8px;">Piring ${plate.plateId}</div>`;
-            plate.items.forEach(item => { 
-                const lineTotal = item.qty * item.originalPrice;
-                itemsHtml += `<div style="display:flex; justify-content:space-between; margin-bottom: 2px;"><span>${item.qty}x ${item.name}</span><span>${lineTotal.toLocaleString('id-ID')}</span></div>`; 
-            });
-        }
-    });
-
-    let discountHtml = totals.totalSavings > 0 ? `<div style="display:flex; justify-content:space-between;"><span>Total Diskon:</span><span>-Rp ${totals.totalSavings.toLocaleString('id-ID')}</span></div>` : "";
-    let promoHtml = totals.promoName ? `<div style="display:flex; justify-content:space-between; font-size:10px; color:#555;"><span>(Promo Aktif:</span><span>${totals.promoName})</span></div>` : "";
-
-    printArea.innerHTML = `
-        <div style="text-align:center; margin-bottom:10px;"><h2 style="margin:0;">${storeName}</h2><div style="font-size:10px;">${storeAddress}</div><div style="font-size:10px;">${dateStr}</div></div>
-        <div style="border-top:1px dashed #000; border-bottom:1px dashed #000; padding:5px 0; margin-bottom:5px; font-size: 11px;">
-            <div>Pesanan: ${orderId}</div><div>Meja: ${order.name}</div><div>Pelanggan: ${order.customerName}</div><div>Kasir: ${currentCashier}</div>
-        </div>
-        ${itemsHtml}
-        <div style="border-top:1px dashed #000; margin-top:10px; padding-top:5px;">
-            <div style="display:flex; justify-content:space-between;"><span>Subtotal:</span><span>Rp ${totals.baseSubtotal.toLocaleString('id-ID')}</span></div>
-            ${discountHtml}${promoHtml}
-            <div style="display:flex; justify-content:space-between;"><span>Pajak:</span><span>Rp ${totals.taxAmount.toLocaleString('id-ID')}</span></div>
-            <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px; margin-top:5px; border-bottom: 1px solid #000; padding-bottom: 5px;"><span>TOTAL:</span><span>Rp ${totals.grandTotal.toLocaleString('id-ID')}</span></div>
-        </div>
-        <div style="margin-top:5px; font-size:11px;">
-            ${cash > 0 ? `<div style="display:flex; justify-content:space-between;"><span>Tunai:</span><span>Rp ${cash.toLocaleString('id-ID')}</span></div>` : ''}
-            ${qris > 0 ? `<div style="display:flex; justify-content:space-between;"><span>QRIS:</span><span>Rp ${qris.toLocaleString('id-ID')}</span></div>` : ''}
-            ${changeDue > 0 ? `<div style="display:flex; justify-content:space-between; font-weight:bold; margin-top: 5px;"><span>KEMBALIAN:</span><span>Rp ${changeDue.toLocaleString('id-ID')}</span></div>` : ''}
-        </div>
-        <div style="text-align:center; margin-top:15px; font-weight:bold; font-size: 12px;">${footer1}</div>
-        <div style="text-align:center; margin-top:2px; font-size: 10px;">${footer2}</div>
-        ${footer3 ? `<div style="text-align:center; margin-top:2px; font-size: 10px;">${footer3}</div>` : ''}
-    `;
+    closeReview(); 
+    activeOrders.splice(currentOrderIndex, 1);
+    currentOrderIndex = 0; 
+    activePlateIndex = 0; 
+    preserveUnpaidTables(); 
+    renderCustomerTabs(); 
+    renderCartUI(); 
+    runBackgroundSync();
 }
 
 // ---------------------------------------------------------
@@ -883,36 +919,6 @@ function openShiftReport() {
     };
 }
 
-async function printShiftReport() {
-    const settings = await getDynamicSettings();
-    const storeName = settings["Store_Name"] || "KSB POS"; const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
-    const printArea = document.getElementById("printable-area"); const dateStr = new Date().toLocaleString('id-ID');
-    const data = window.currentShiftData;
-
-    let foodHtml = "";
-    if (data.isPast) { foodHtml = `<div style="font-size:11px; text-align:left; white-space:pre-wrap;">${data.foodStr}</div>`; } 
-    else { for (const [name, qty] of Object.entries(data.foodSummary)) { foodHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>${name}</span><span>${qty}x</span></div>`; } }
-
-    const printShiftId = data.isPast ? data.shiftId : currentShiftId; const printCashier = data.isPast ? data.cashier : currentCashier;
-
-    printArea.innerHTML = `
-        <div style="text-align:center; margin-bottom:10px;"><h2 style="margin:0;">${storeName}</h2><div style="font-size:10px;">${storeAddress}</div><div style="font-size:10px;">${dateStr}</div></div>
-        <div style="border-top:1px dashed #000; border-bottom:1px dashed #000; padding:5px 0; margin-bottom:10px; font-size: 14px; text-align:center; font-weight:bold;">LAPORAN SHIFT</div>
-        <div style="font-size: 11px; margin-bottom:10px;">
-            <div>ID Shift: ${printShiftId}</div><div>Kasir: ${printCashier}</div><div>Pelanggan: ${data.totalCustomers}</div><div>Piring Digunakan: ${data.totalPlates}</div>
-        </div>
-        <div style="border-bottom:1px dashed #000; margin-bottom:5px; font-weight:bold;">FINANSIAL</div>
-        <div style="display:flex; justify-content:space-between;"><span>Omset Kotor:</span><span>Rp ${data.totalOmset.toLocaleString('id-ID')}</span></div>
-        <div style="display:flex; justify-content:space-between;"><span>QRIS Diterima:</span><span>Rp ${data.totalQris.toLocaleString('id-ID')}</span></div>
-        <div style="display:flex; justify-content:space-between; margin-top:5px; font-weight:bold;"><span>Kas Diterima:</span><span>Rp ${data.totalCash.toLocaleString('id-ID')}</span></div>
-        <div style="display:flex; justify-content:space-between; color:#e74c3c;"><span>Pengeluaran:</span><span>-Rp ${data.totalExpenses.toLocaleString('id-ID')}</span></div>
-        <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px; margin-top:5px; border-top: 1px solid #000; padding-top: 5px;"><span>UANG DI LACI:</span><span>Rp ${data.netCash.toLocaleString('id-ID')}</span></div>
-        <div style="border-bottom:1px dashed #000; margin-top:15px; margin-bottom:5px; font-weight:bold;">ITEM TERJUAL</div>${foodHtml}
-        <div style="text-align:center; margin-top:20px; font-weight:bold; font-size: 12px;">AKHIR LAPORAN</div>
-    `;
-    window.print();
-}
-
 function closeShiftReport() { document.getElementById("shift-report-modal").classList.add("hidden"); }
 
 function initiateLogoutSequence() { 
@@ -1040,7 +1046,7 @@ function openSettings() { document.getElementById("settings-modal").classList.re
 function closeSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
 
 // ---------------------------------------------------------
-// BACKGROUND SYNC ENGINE (PUSH ONLY)
+// BACKGROUND SYNC ENGINE 
 // ---------------------------------------------------------
 async function runBackgroundSync() {
     if (!navigator.onLine) return; 
@@ -1083,6 +1089,50 @@ async function runBackgroundSync() {
     tx = db.transaction(["unsynced_members"], "readonly"); items = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
     for (const mem of items) {
         try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+    }
+}
+
+// ============================================================================
+// 🖨️ WEB BLUETOOTH ESC/POS ENGINE (THE HEAVY LIFTING)
+// ============================================================================
+let printCharacteristic = null;
+
+async function connectBluetoothPrinter() {
+    try {
+        const device = await navigator.bluetooth.requestDevice({
+            filters: [{ services: ['000018f0-0000-1000-8000-00805f9b34fb'] }]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb');
+        printCharacteristic = await service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb');
+        alert("✅ Printer Bluetooth Berhasil Terhubung!");
+    } catch (error) {
+        alert("Koneksi Bluetooth gagal atau dibatalkan. Pastikan printer menyala dan Bluetooth aktif.");
+    }
+}
+
+async function printToBluetooth(receiptText) {
+    if (!printCharacteristic) {
+        alert("⚠️ Hubungkan Printer Bluetooth terlebih dahulu dengan mengklik 'Konek Printer' di bilah atas.");
+        return;
+    }
+
+    try {
+        const encoder = new TextEncoder();
+        const textBytes = encoder.encode(receiptText);
+        const initCmd = new Uint8Array([0x1B, 0x40]); 
+        const payload = new Uint8Array(initCmd.length + textBytes.length);
+        payload.set(initCmd, 0);
+        payload.set(textBytes, initCmd.length);
+
+        const CHUNK_SIZE = 20;
+        for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+            const chunk = payload.slice(i, i + CHUNK_SIZE);
+            await printCharacteristic.writeValue(chunk);
+            await new Promise(resolve => setTimeout(resolve, 10)); 
+        }
+    } catch (error) {
+        alert("Gagal mencetak ke Bluetooth: " + error.message);
     }
 }
 
