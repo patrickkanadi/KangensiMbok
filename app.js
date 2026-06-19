@@ -652,7 +652,7 @@ async function finalizePayment(shouldPrint) {
     const finalStatus = shouldPrint ? "Paid" : "Paid but not printed";
 
     if (shouldPrint) { 
-        // 1. PULL DYNAMIC SETTINGS FROM LOCAL DATABASE
+        // 1. PULL DYNAMIC SETTINGS
         const settings = await getDynamicSettings();
         const storeName = settings["Store_Name"] || "KSB POS"; 
         const storeAddress = settings["Store_Address"] || "Surabaya, Indonesia";
@@ -660,57 +660,113 @@ async function finalizePayment(shouldPrint) {
         const footer2 = settings["Footer_2"] || "Silakan datang kembali"; 
         const footer3 = settings["Footer_3"] || ""; 
 
-        // 2. SMART CENTERING HELPER (For 58mm Printers = 32 characters max)
-        const centerText = (text) => {
+        // --- ESC/POS HARDWARE COMMANDS ---
+        const ESC = '\x1B';
+        const BOLD_ON = ESC + '\x45\x01';
+        const BOLD_OFF = ESC + '\x45\x00';
+
+        // --- SMART FORMATTING HELPERS (For 58mm / 32 Chars) ---
+        // Helper 1: Rata Tengah Pintar (Tidak memotong kata, tapi membungkusnya ke baris baru)
+        const centerWrap = (text) => {
             if (!text) return "";
-            let str = String(text).trim();
-            if (str.length >= 32) return str.substring(0, 32) + "\n";
-            let pad = Math.floor((32 - str.length) / 2);
-            return " ".repeat(pad) + str + "\n";
+            let words = String(text).split(" ");
+            let lines = [];
+            let currentLine = "";
+            
+            words.forEach(word => {
+                if ((currentLine + word).length > 32) {
+                    if (currentLine) lines.push(currentLine.trim());
+                    // Jika satu kata lebih dari 32 karakter, potong paksa
+                    if (word.length > 32) {
+                        lines.push(word.substring(0, 32));
+                        currentLine = word.substring(32) + " ";
+                    } else {
+                        currentLine = word + " ";
+                    }
+                } else {
+                    currentLine += word + " ";
+                }
+            });
+            if (currentLine.trim()) lines.push(currentLine.trim());
+            
+            return lines.map(line => {
+                let pad = Math.floor((32 - line.length) / 2);
+                if (pad < 0) pad = 0;
+                return " ".repeat(pad) + line + "\n";
+            }).join("");
         };
 
-        // 3. BUILD THE DYNAMIC RECEIPT STRING
-        let receiptText = centerText(storeName);
-        receiptText += centerText(storeAddress);
+        // Helper 2: Rata Kiri-Kanan (Item di kiri, Harga di kanan)
+        const formatLine = (leftText, rightText) => {
+            let leftStr = String(leftText);
+            let rightStr = String(rightText);
+            let spacesCount = 32 - leftStr.length - rightStr.length;
+            
+            if (spacesCount > 0) {
+                // Muat di satu baris
+                return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
+            } else {
+                // Jika teks terlalu panjang, taruh harga di baris baru rata kanan
+                let rightPad = 32 - rightStr.length;
+                if(rightPad < 0) rightPad = 0;
+                return leftStr + "\n" + " ".repeat(rightPad) + rightStr + "\n";
+            }
+        };
+
+        // 3. BUILD THE RECEIPT TEXT
+        let receiptText = "";
+        
+        // --- HEADER ---
+        receiptText += BOLD_ON + centerWrap(storeName) + BOLD_OFF;
+        receiptText += centerWrap(storeAddress);
+        receiptText += centerWrap(new Date().toLocaleString('id-ID'));
         receiptText += "--------------------------------\n";
-        receiptText += `Pesanan: ${orderId}\n`;
-        receiptText += `Meja:    ${currentOrder.name}\n`;
-        receiptText += `Kasir:   ${currentCashier}\n`;
+        receiptText += `Pesanan:   ${orderId}\n`;
+        receiptText += `Meja:      ${currentOrder.name}\n`;
+        receiptText += `Pelanggan: ${currentOrder.customerName || "Walk-in"}\n`;
+        receiptText += `Kasir:     ${currentCashier}\n`;
         receiptText += "--------------------------------\n";
         
+        // --- ITEMS ---
         currentOrder.plates.forEach(plate => {
             if(plate.items.length > 0) {
+                // Cetak tebal untuk tulisan Piring
+                receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
+                
                 plate.items.forEach(item => {
-                    let lineTotal = item.qty * item.originalPrice;
-                    receiptText += `${item.qty}x ${item.name}\n`;
-                    // Manual right-alignment pad for prices
-                    let priceStr = `Rp ${lineTotal.toLocaleString('id-ID')}`;
-                    let padLen = 32 - priceStr.length;
-                    if(padLen < 0) padLen = 0;
-                    receiptText += " ".repeat(padLen) + priceStr + "\n"; 
+                    let itemName = `${item.qty}x ${item.name}`;
+                    let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID');
+                    receiptText += formatLine(itemName, itemPrice);
                 });
             }
         });
         
+        // --- TOTALS ---
         receiptText += "--------------------------------\n";
-        receiptText += `SUBTOTAL:        Rp ${totals.baseSubtotal.toLocaleString('id-ID')}\n`;
+        receiptText += formatLine("Subtotal:", "Rp " + totals.baseSubtotal.toLocaleString('id-ID'));
+        
         if (totals.totalSavings > 0) {
-            receiptText += `DISKON:         -Rp ${totals.totalSavings.toLocaleString('id-ID')}\n`;
+            receiptText += formatLine("Total Diskon:", "-Rp " + totals.totalSavings.toLocaleString('id-ID'));
         }
-        receiptText += `PAJAK:           Rp ${totals.taxAmount.toLocaleString('id-ID')}\n`;
-        receiptText += "--------------------------------\n";
-        receiptText += `TOTAL:           Rp ${totals.grandTotal.toLocaleString('id-ID')}\n`;
-        receiptText += `TUNAI:           Rp ${cashPaid.toLocaleString('id-ID')}\n`;
-        receiptText += `KEMBALI:         Rp ${changeDue.toLocaleString('id-ID')}\n`;
+        
+        receiptText += formatLine("Pajak:", "Rp " + totals.taxAmount.toLocaleString('id-ID'));
         receiptText += "--------------------------------\n";
         
-        // 4. INJECT DYNAMIC FOOTERS
-        receiptText += centerText(footer1);
-        if (footer2) receiptText += centerText(footer2);
-        if (footer3) receiptText += centerText(footer3);
+        // Cetak tebal untuk Grand Total
+        receiptText += BOLD_ON + formatLine("TOTAL:", "Rp " + totals.grandTotal.toLocaleString('id-ID')) + BOLD_OFF;
+        
+        if (cashPaid > 0) receiptText += formatLine("Tunai:", "Rp " + cashPaid.toLocaleString('id-ID'));
+        if (qrisPaid > 0) receiptText += formatLine("QRIS:", "Rp " + qrisPaid.toLocaleString('id-ID'));
+        if (changeDue > 0) receiptText += formatLine("Kembali:", "Rp " + changeDue.toLocaleString('id-ID'));
+        
+        // --- FOOTERS ---
+        receiptText += "--------------------------------\n";
+        receiptText += centerWrap(footer1);
+        if (footer2) receiptText += centerWrap(footer2);
+        if (footer3) receiptText += centerWrap(footer3);
         receiptText += "\n\n\n\n"; // Final push to clear the tear bar
 
-        // 5. FIRE TO BLUETOOTH ENGINE
+        // 4. FIRE TO BLUETOOTH ENGINE
         await printToBluetooth(receiptText);
         
     } else if (changeDue > 0) { 
