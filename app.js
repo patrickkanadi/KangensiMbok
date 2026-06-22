@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 34; 
+const DB_VERSION = 35; 
 let db;
 
 let currentCategory = ""; 
@@ -141,7 +141,6 @@ async function attemptLogin() {
 
                 if (shiftRes.target.result) {
                     sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
-                    // CEK KADALUARSA: Jika lebih dari 12 jam
                     if (Date.now() - new Date(sessionData.loginTime).getTime() > 12 * 60 * 60 * 1000) {
                         needsAutoExpire = true;
                     }
@@ -188,7 +187,6 @@ function checkActiveSession() {
         const session = JSON.parse(savedSession);
         const loginTime = new Date(session.loginTime).getTime();
         
-        // CEK KADALUARSA SAAT HALAMAN DIMUAT ULANG
         if (Date.now() - loginTime > 12 * 60 * 60 * 1000) {
             currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
             autoExpireShift();
@@ -908,6 +906,7 @@ function calculateLiveDrawer(callback) {
 // ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
+
 function renderHistoryList(type) {
     const container = document.getElementById("history-container"); container.innerHTML = "";
     
@@ -921,9 +920,11 @@ function renderHistoryList(type) {
                             `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                             
                 let btnVoid = (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
-                let btnPrint = (o.orderStatus.startsWith("Paid")) ? `<button onclick="reprintOrder('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">🖨️ Cetak</button>` : '';
+                
+                // TOMBOL DETAIL DITAMBAHKAN
+                let btnDetail = `<button onclick="previewOrder('${o.orderId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">👁️ Detail</button>`;
 
-                container.innerHTML += `<div class="history-row"><div><strong>${o.tablePrefix} (${o.customerName})</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnPrint} ${btnVoid}</div></div>`;
+                container.innerHTML += `<div class="history-row"><div><strong>${o.tablePrefix} (${o.customerName})</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnDetail} ${btnVoid}</div></div>`;
             });
         };
     } else if (type === 'expenses') {
@@ -943,13 +944,13 @@ function renderHistoryList(type) {
             const shifts = e.target.result.reverse();
             if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada riwayat shift yang tercatat di perangkat ini.</div>`;
             shifts.forEach(s => {
-                let btnPrint = `<button onclick="printShiftReport('${s.shiftId}')" style="background:#27ae60; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">🖨️ Cetak</button>`;
+                let btnDetail = `<button onclick="previewShiftReport('${s.shiftId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">👁️ Detail</button>`;
                 container.innerHTML += `
                     <div class="history-row">
                         <div><strong>${s.shiftId} (${s.cashier})</strong><br><small style="color:#7f8c8d;">Logout: ${new Date(s.logoutTime).toLocaleString('id-ID')}</small></div>
                         <div style="display:flex; gap:10px;">
-                            ${btnPrint}
-                            <button onclick="viewPastShift('${s.shiftId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Lihat Laporan</button>
+                            ${btnDetail}
+                            <button onclick="viewPastShift('${s.shiftId}')" style="background:#95a5a6; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Grafik</button>
                         </div>
                     </div>`;
             });
@@ -1033,7 +1034,6 @@ async function autoExpireShift() {
     });
 }
 
-// Pengecekan real-time setiap menit saat tablet dibiarkan menyala
 window.setInterval(() => {
     if (currentLoginTime && !document.getElementById("pos-screen").classList.contains("hidden")) {
         const loginTime = new Date(currentLoginTime).getTime();
@@ -1058,6 +1058,171 @@ function viewPastShift(shiftId) {
             };
         } else { populateShiftModal(s, true); }
     };
+}
+
+// 👁️ FUNGSI PRATINJAU TRANSAKSI (DIGITAL RECEIPT SIMULATOR)
+function previewOrder(orderId) {
+    db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = async (e) => {
+        const order = e.target.result;
+        if(!order) return alert("Pesanan tidak ditemukan.");
+        const settings = await getDynamicSettings();
+
+        const formatLine = (leftText, rightText) => {
+            let maxChars = 32;
+            let leftStr = String(leftText);
+            let rightStr = String(rightText);
+            if (leftStr.length + rightStr.length > maxChars) {
+                let rightPad = maxChars - rightStr.length;
+                return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
+            } else {
+                let spacesCount = maxChars - leftStr.length - rightStr.length;
+                return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
+            }
+        };
+
+        let html = "";
+        html += '<div style="text-align:center;">';
+        html += '<div style="font-size:18px; font-weight:bold; margin-bottom:5px;">' + (settings["Store_Name"] || "KSB POS") + '</div>';
+        html += '<div>' + (settings["Store_Address"] || "Surabaya") + '</div>';
+        html += '<div>' + new Date(order.timestamp).toLocaleString('id-ID') + '</div>';
+        html += '<div>--------------------------------</div>';
+        html += '</div>';
+
+        html += '<div style="text-align:left; white-space: pre-wrap;">';
+        html += `Pesanan:   ${order.orderId}\n`;
+        html += `Meja:      ${order.tablePrefix}\n`;
+        html += `Pelanggan: ${order.customerName || "Walk-in"}\n`;
+        html += `Kasir:     ${order.cashier}\n`;
+        html += "--------------------------------\n";
+
+        order.plates.forEach(plate => {
+            if(plate.items.length > 0) {
+                html += `<b>Piring ${plate.plateId}</b>\n`;
+                plate.items.forEach(item => {
+                    let itemName = `${item.qty}x ${item.name}`;
+                    let itemOrigTotal = item.qty * item.originalPrice;
+                    let itemEffectiveTotal = item.qty * item.price;
+                    let itemDiscount = itemOrigTotal - itemEffectiveTotal;
+
+                    html += formatLine(itemName, itemOrigTotal.toLocaleString('id-ID'));
+                    if (itemDiscount > 0) {
+                        html += formatLine("  Diskon Item:", "-" + itemDiscount.toLocaleString('id-ID'));
+                    }
+                });
+            }
+        });
+
+        html += "--------------------------------\n";
+        html += formatLine("Subtotal:", "Rp " + order.subtotal.toLocaleString('id-ID'));
+        if (order.discounts > 0) html += formatLine("Total Diskon:", "-Rp " + order.discounts.toLocaleString('id-ID'));
+        html += "--------------------------------\n";
+        
+        let totalSpace = 32 - "TOTAL:".length - ("Rp " + order.grandTotal.toLocaleString('id-ID')).length;
+        if(totalSpace < 0) totalSpace = 0;
+        html += '<div style="font-size:16px; font-weight:bold; line-height:1.2;">TOTAL:' + " ".repeat(totalSpace) + "Rp " + order.grandTotal.toLocaleString('id-ID') + '</div>';
+
+        if (order.cashAmount > 0) html += formatLine("Tunai:", "Rp " + order.cashAmount.toLocaleString('id-ID'));
+        if (order.qrisAmount > 0) html += formatLine("QRIS:", "Rp " + order.qrisAmount.toLocaleString('id-ID'));
+        html += "</div>"; // Tutup div left align
+
+        html += '<div style="text-align:center;">';
+        html += '<div>--------------------------------</div>';
+        html += '<div style="font-size:18px; font-weight:bold; margin-top:5px;">' + (settings["Footer_1"] || "TERIMA KASIH!") + '</div>';
+        html += '</div>';
+
+        document.getElementById("receipt-paper").innerHTML = html;
+        document.getElementById("btn-reprint-preview").onclick = () => { closeReceiptPreview(); reprintOrder(order.orderId); };
+        document.getElementById("receipt-preview-modal").classList.remove("hidden");
+    };
+}
+
+// 👁️ FUNGSI PRATINJAU LAPORAN SHIFT
+async function previewShiftReport(shiftId) {
+    let getShift = (id) => new Promise(res => {
+        db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(id).onsuccess = e => {
+            if(e.target.result) res(e.target.result);
+            else db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(id).onsuccess = ev => res(ev.target.result);
+        };
+    });
+
+    const s = await getShift(shiftId);
+    if(!s) return alert("Laporan shift tidak ditemukan.");
+    const settings = await getDynamicSettings();
+
+    const formatLine = (leftText, rightText) => {
+        let maxChars = 32;
+        let leftStr = String(leftText);
+        let rightStr = String(rightText);
+        if (leftStr.length + rightStr.length > maxChars) {
+            let rightPad = maxChars - rightStr.length;
+            return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
+        } else {
+            let spacesCount = maxChars - leftStr.length - rightStr.length;
+            return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
+        }
+    };
+
+    let html = "";
+    html += '<div style="text-align:center;">';
+    html += '<div style="font-size:18px; font-weight:bold; margin-bottom:5px;">' + (settings["Store_Name"] || "KSB POS") + '</div>';
+    html += '<div>' + (settings["Store_Address"] || "Surabaya") + '</div>';
+    html += '<div>--------------------------------</div>';
+    html += '<b>LAPORAN SHIFT</b>';
+    html += '<div>--------------------------------</div>';
+    html += '</div>';
+
+    html += '<div style="text-align:left; white-space: pre-wrap;">';
+    html += `ID:    ${s.shiftId}\n`;
+    html += `Kasir: ${s.cashier}\n`;
+    html += `Masuk: ${new Date(s.loginTime).toLocaleString('id-ID')}\n`;
+    html += `Keluar:${new Date(s.logoutTime).toLocaleString('id-ID')}\n`;
+    html += "--------------------------------\n";
+    
+    html += formatLine("Pelanggan:", s.totalCustomers);
+    html += formatLine("Piring:", s.totalPlates);
+    html += "--------------------------------\n";
+    
+    let omset = Number(String(s.totalOmset).replace(/[^\d.-]/g, '')) || 0;
+    let cash = Number(String(s.totalCash).replace(/[^\d.-]/g, '')) || 0;
+    let qris = Number(String(s.totalQris).replace(/[^\d.-]/g, '')) || 0;
+    let exp = Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')) || 0;
+    let net = Number(String(s.netCash).replace(/[^\d.-]/g, '')) || 0;
+
+    html += formatLine("Omset Kotor:", "Rp " + omset.toLocaleString('id-ID'));
+    html += formatLine("Kas Tunai:", "Rp " + cash.toLocaleString('id-ID'));
+    html += formatLine("QRIS Masuk:", "Rp " + qris.toLocaleString('id-ID'));
+    html += formatLine("Pengeluaran:", "-Rp " + exp.toLocaleString('id-ID'));
+    html += "--------------------------------\n";
+    
+    let totalSpace = 32 - "UANG LACI:".length - ("Rp " + net.toLocaleString('id-ID')).length;
+    if(totalSpace < 0) totalSpace = 0;
+    html += '<div style="font-size:16px; font-weight:bold; line-height:1.2;">UANG LACI:' + " ".repeat(totalSpace) + "Rp " + net.toLocaleString('id-ID') + '</div>';
+    html += "--------------------------------\n";
+    
+    html += "<b>ITEM TERJUAL:</b>\n";
+    let foodStr = typeof s.foodSummary === 'string' ? s.foodSummary : (s.foodSummaryStr || "");
+    if (!foodStr && typeof s.foodSummary === 'object') {
+        for (const [name, qty] of Object.entries(s.foodSummary)) { html += ` ${qty}x ${name}\n`; }
+    } else if (foodStr) {
+        let items = foodStr.split('\n');
+        items.forEach(item => { if(item.trim()) html += " " + item.trim().replace('•', '') + "\n"; });
+    } else {
+        html += " Tidak ada item terjual\n";
+    }
+    html += "</div>"; // Tutup div left align
+
+    html += '<div style="text-align:center;">';
+    html += '<div>--------------------------------</div>';
+    html += '<div>Dicetak: ' + new Date().toLocaleString('id-ID') + '</div>';
+    html += '</div>';
+
+    document.getElementById("receipt-paper").innerHTML = html;
+    document.getElementById("btn-reprint-preview").onclick = () => { closeReceiptPreview(); printShiftReport(s.shiftId); };
+    document.getElementById("receipt-preview-modal").classList.remove("hidden");
+}
+
+function closeReceiptPreview() {
+    document.getElementById("receipt-preview-modal").classList.add("hidden");
 }
 
 function populateShiftModal(s, isPast) {
@@ -1264,225 +1429,6 @@ async function runBackgroundSync() {
     for (const mem of items) {
         try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
     }
-}
-
-// ============================================================================
-// 🖨️ WEB BLUETOOTH ESC/POS ENGINE
-// ============================================================================
-let printCharacteristic = null;
-
-async function connectBluetoothPrinter() {
-    try {
-        const device = await navigator.bluetooth.requestDevice({
-            filters: [{ services: ['000018f0-0000-1000-8000-00805f9b34fb'] }]
-        });
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb');
-        printCharacteristic = await service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb');
-        alert("✅ Printer Bluetooth Berhasil Terhubung!");
-    } catch (error) {
-        alert("Koneksi Bluetooth gagal atau dibatalkan. Pastikan printer menyala dan Bluetooth aktif.");
-    }
-}
-
-async function printToBluetooth(receiptText) {
-    if (!printCharacteristic) {
-        alert("⚠️ Hubungkan Printer Bluetooth terlebih dahulu dengan mengklik 'Konek Printer' di bilah atas.");
-        return;
-    }
-
-    try {
-        const encoder = new TextEncoder();
-        const textBytes = encoder.encode(receiptText);
-        const initCmd = new Uint8Array([0x1B, 0x40]); 
-        const payload = new Uint8Array(initCmd.length + textBytes.length);
-        payload.set(initCmd, 0);
-        payload.set(textBytes, initCmd.length);
-
-        const CHUNK_SIZE = 20;
-        for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
-            const chunk = payload.slice(i, i + CHUNK_SIZE);
-            await printCharacteristic.writeValue(chunk);
-            await new Promise(resolve => setTimeout(resolve, 10)); 
-        }
-    } catch (error) {
-        alert("Gagal mencetak ke Bluetooth: " + error.message);
-    }
-}
-
-// ============================================================================
-// 🖨️ FITUR CETAK ULANG & LAPORAN SHIFT (REPRINT & SHIFT REPORT)
-// ============================================================================
-async function reprintOrder(orderId) {
-    db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = async (e) => {
-        const order = e.target.result;
-        if(!order) return alert("Pesanan tidak ditemukan.");
-
-        const settings = await getDynamicSettings();
-        
-        const ESC = '\x1B';
-        const ALIGN_LEFT = ESC + '\x61\x00';
-        const ALIGN_CENTER = ESC + '\x61\x01';
-        const BOLD_ON = ESC + '\x45\x01';
-        const BOLD_OFF = ESC + '\x45\x00';
-        const TEXT_BIG = ESC + '!\x11'; 
-        const TEXT_NORMAL = ESC + '!\x00';
-
-        const formatLine = (leftText, rightText, isBig = false) => {
-            let maxChars = isBig ? 16 : 32;
-            let leftStr = String(leftText);
-            let rightStr = String(rightText);
-            if (leftStr.length + rightStr.length > maxChars) {
-                let rightPad = maxChars - rightStr.length;
-                return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
-            } else {
-                let spacesCount = maxChars - leftStr.length - rightStr.length;
-                return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
-            }
-        };
-
-        let receiptText = "";
-        
-        receiptText += ALIGN_CENTER;
-        receiptText += TEXT_BIG + BOLD_ON + (settings["Store_Name"] || "KSB POS") + "\n" + BOLD_OFF + TEXT_NORMAL;
-        receiptText += (settings["Store_Address"] || "Surabaya") + "\n";
-        receiptText += new Date(order.timestamp).toLocaleString('id-ID') + "\n";
-        receiptText += "--------------------------------\n";
-        receiptText += BOLD_ON + "*** COPY / REPRINT ***\n" + BOLD_OFF;
-        receiptText += "--------------------------------\n";
-        
-        receiptText += ALIGN_LEFT;
-        receiptText += `Pesanan:   ${order.orderId}\n`;
-        receiptText += `Meja:      ${order.tablePrefix}\n`;
-        receiptText += `Pelanggan: ${order.customerName || "Walk-in"}\n`;
-        receiptText += `Kasir:     ${order.cashier}\n`;
-        receiptText += "--------------------------------\n";
-        
-        order.plates.forEach(plate => {
-            if(plate.items.length > 0) {
-                receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
-                plate.items.forEach(item => {
-                    let itemName = `${item.qty}x ${item.name}`;
-                    let itemOrigTotal = item.qty * item.originalPrice;
-                    let itemEffectiveTotal = item.qty * item.price;
-                    let itemDiscount = itemOrigTotal - itemEffectiveTotal;
-
-                    receiptText += formatLine(itemName, itemOrigTotal.toLocaleString('id-ID'), false);
-                    if (itemDiscount > 0) {
-                        receiptText += formatLine("  Diskon Item:", "-" + itemDiscount.toLocaleString('id-ID'), false);
-                    }
-                });
-            }
-        });
-        
-        receiptText += "--------------------------------\n";
-        receiptText += formatLine("Subtotal:", "Rp " + order.subtotal.toLocaleString('id-ID'), false);
-        if (order.discounts > 0) receiptText += formatLine("Total Diskon:", "-Rp " + order.discounts.toLocaleString('id-ID'), false);
-        receiptText += "--------------------------------\n";
-        receiptText += TEXT_BIG + BOLD_ON + formatLine("TOTAL:", "Rp " + order.grandTotal.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
-        
-        if (order.cashAmount > 0) receiptText += formatLine("Tunai:", "Rp " + order.cashAmount.toLocaleString('id-ID'), false);
-        if (order.qrisAmount > 0) receiptText += formatLine("QRIS:", "Rp " + order.qrisAmount.toLocaleString('id-ID'), false);
-        
-        receiptText += "--------------------------------\n";
-        receiptText += ALIGN_CENTER;
-        receiptText += TEXT_BIG + BOLD_ON + (settings["Footer_1"] || "TERIMA KASIH!") + "\n" + BOLD_OFF + TEXT_NORMAL;
-        receiptText += "\n\n\n\n"; 
-
-        await printToBluetooth(receiptText);
-    };
-}
-
-// CETAK SHIFT
-function printCurrentShift() { printShiftReport(currentShiftId); }
-function printPastShiftFromModal() {
-    if(window.currentShiftData && window.currentShiftData.shiftId) { printShiftReport(window.currentShiftData.shiftId); }
-}
-
-async function printShiftReport(shiftId) {
-    let getShift = (id) => new Promise(res => {
-        db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(id).onsuccess = e => {
-            if(e.target.result) res(e.target.result);
-            else db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(id).onsuccess = ev => res(ev.target.result);
-        };
-    });
-
-    const s = await getShift(shiftId);
-    if(!s) return alert("Laporan shift tidak ditemukan.");
-
-    const settings = await getDynamicSettings();
-    
-    const ESC = '\x1B';
-    const ALIGN_LEFT = ESC + '\x61\x00';
-    const ALIGN_CENTER = ESC + '\x61\x01';
-    const BOLD_ON = ESC + '\x45\x01';
-    const BOLD_OFF = ESC + '\x45\x00';
-    const TEXT_BIG = ESC + '!\x11'; 
-    const TEXT_NORMAL = ESC + '!\x00';
-
-    const formatLine = (leftText, rightText, isBig = false) => {
-        let maxChars = isBig ? 16 : 32;
-        let leftStr = String(leftText);
-        let rightStr = String(rightText);
-        if (leftStr.length + rightStr.length > maxChars) {
-            let rightPad = maxChars - rightStr.length;
-            return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
-        } else {
-            let spacesCount = maxChars - leftStr.length - rightStr.length;
-            return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
-        }
-    };
-
-    let receiptText = "";
-    receiptText += ALIGN_CENTER;
-    receiptText += TEXT_BIG + BOLD_ON + (settings["Store_Name"] || "KSB POS") + "\n" + BOLD_OFF + TEXT_NORMAL;
-    receiptText += (settings["Store_Address"] || "Surabaya") + "\n";
-    receiptText += "--------------------------------\n";
-    receiptText += BOLD_ON + "LAPORAN SHIFT\n" + BOLD_OFF;
-    receiptText += "--------------------------------\n";
-    
-    receiptText += ALIGN_LEFT;
-    receiptText += `ID:    ${s.shiftId}\n`;
-    receiptText += `Kasir: ${s.cashier}\n`;
-    receiptText += `Masuk: ${new Date(s.loginTime).toLocaleString('id-ID')}\n`;
-    receiptText += `Keluar:${new Date(s.logoutTime).toLocaleString('id-ID')}\n`;
-    receiptText += "--------------------------------\n";
-    
-    receiptText += formatLine("Pelanggan:", s.totalCustomers, false);
-    receiptText += formatLine("Piring:", s.totalPlates, false);
-    receiptText += "--------------------------------\n";
-    
-    let omset = Number(String(s.totalOmset).replace(/[^\d.-]/g, '')) || 0;
-    let cash = Number(String(s.totalCash).replace(/[^\d.-]/g, '')) || 0;
-    let qris = Number(String(s.totalQris).replace(/[^\d.-]/g, '')) || 0;
-    let exp = Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')) || 0;
-    let net = Number(String(s.netCash).replace(/[^\d.-]/g, '')) || 0;
-
-    receiptText += formatLine("Omset Kotor:", "Rp " + omset.toLocaleString('id-ID'), false);
-    receiptText += formatLine("Kas Tunai:", "Rp " + cash.toLocaleString('id-ID'), false);
-    receiptText += formatLine("QRIS Masuk:", "Rp " + qris.toLocaleString('id-ID'), false);
-    receiptText += formatLine("Pengeluaran:", "-Rp " + exp.toLocaleString('id-ID'), false);
-    receiptText += "--------------------------------\n";
-    receiptText += TEXT_BIG + BOLD_ON + formatLine("UANG LACI:", "Rp " + net.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
-    receiptText += "--------------------------------\n";
-    
-    receiptText += BOLD_ON + "ITEM TERJUAL:\n" + BOLD_OFF;
-    let foodStr = typeof s.foodSummary === 'string' ? s.foodSummary : (s.foodSummaryStr || "");
-    if (!foodStr && typeof s.foodSummary === 'object') {
-        for (const [name, qty] of Object.entries(s.foodSummary)) { 
-            receiptText += ` ${qty}x ${name}\n`; 
-        }
-    } else if (foodStr) {
-        let items = foodStr.split('\n');
-        items.forEach(item => { if(item.trim()) receiptText += " " + item.trim().replace('•', '') + "\n"; });
-    } else {
-        receiptText += " Tidak ada item terjual\n";
-    }
-    
-    receiptText += "--------------------------------\n";
-    receiptText += ALIGN_CENTER + "Dicetak: " + new Date().toLocaleString('id-ID') + "\n\n\n\n";
-
-    await printToBluetooth(receiptText);
 }
 
 window.onload = async () => { 
