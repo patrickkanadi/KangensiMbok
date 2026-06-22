@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 33; 
+const DB_VERSION = 34; 
 let db;
 
 let currentCategory = ""; 
@@ -137,14 +137,28 @@ async function attemptLogin() {
         if (staffMember) {
             db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").get(staffMember.pin).onsuccess = (shiftRes) => {
                 let sessionData;
+                let needsAutoExpire = false;
+
                 if (shiftRes.target.result) {
                     sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: shiftRes.target.result.shiftId, loginTime: shiftRes.target.result.loginTime };
+                    // CEK KADALUARSA: Jika lebih dari 12 jam
+                    if (Date.now() - new Date(sessionData.loginTime).getTime() > 12 * 60 * 60 * 1000) {
+                        needsAutoExpire = true;
+                    }
                 } else {
                     sessionData = { name: staffMember.name, pin: staffMember.pin, shiftId: "SHF-" + Date.now(), loginTime: new Date().toISOString() };
                     db.transaction(["active_shifts"], "readwrite").objectStore("active_shifts").put({ pin: staffMember.pin, shiftId: sessionData.shiftId, loginTime: sessionData.loginTime });
                 }
+                
                 localStorage.setItem("pos_active_session", JSON.stringify(sessionData));
-                loadSessionData(sessionData);
+                
+                if (needsAutoExpire) {
+                    currentCashier = sessionData.name; currentPin = sessionData.pin; currentShiftId = sessionData.shiftId; currentLoginTime = sessionData.loginTime;
+                    alert("Shift Anda yang sebelumnya menggantung melebihi 12 jam. Sistem sedang merekap dan menutupnya secara otomatis... Silakan coba login lagi dalam beberapa detik.");
+                    autoExpireShift();
+                } else {
+                    loadSessionData(sessionData);
+                }
             };
         } else { 
             alert(`PIN salah atau tidak ditemukan. Pastikan koneksi internet aktif.`); 
@@ -170,8 +184,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function checkActiveSession() {
     const savedSession = localStorage.getItem("pos_active_session");
-    if (savedSession) { loadSessionData(JSON.parse(savedSession)); }
+    if (savedSession) { 
+        const session = JSON.parse(savedSession);
+        const loginTime = new Date(session.loginTime).getTime();
+        
+        // CEK KADALUARSA SAAT HALAMAN DIMUAT ULANG
+        if (Date.now() - loginTime > 12 * 60 * 60 * 1000) {
+            currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
+            autoExpireShift();
+        } else {
+            loadSessionData(session); 
+        }
+    }
 }
+
 function loadSessionData(session) {
     currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
     document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
@@ -180,6 +206,7 @@ function loadSessionData(session) {
     
     restoreUnpaidTables(); loadMenuUI(); initTabs(); 
 }
+
 function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
@@ -494,7 +521,6 @@ function confirmAddTable() {
     runBackgroundSync();
 }
 
-// ✏️ EDIT INFO PELANGGAN
 function openEditCustomerModal() {
     if (activeOrders.length === 0) return;
     const order = activeOrders[currentOrderIndex];
@@ -535,7 +561,6 @@ function saveCustomerInfo() {
     preserveUnpaidTables(); closeEditCustomerModal(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
 }
 
-// 🗑️ BATAL MEJA SEPENUHNYA
 function cancelTable() {
     if (activeOrders.length === 0) return;
     if (confirm("⚠️ PERINGATAN: Apakah Anda yakin ingin membatalkan pesanan dan menghapus meja ini sepenuhnya?")) { 
@@ -577,7 +602,6 @@ function updateQty(plateIndex, itemIndex, delta) {
     preserveUnpaidTables(); renderCartUI();
 }
 
-// PERBAIKAN: Memunculkan Bilah Info Meja Aktif
 function renderCartUI() {
     const container = document.getElementById("plates-container"); container.innerHTML = ""; 
     const header = document.getElementById("active-table-header");
@@ -784,7 +808,6 @@ async function finalizePayment(shouldPrint) {
         receiptText += `Kasir:     ${currentCashier}\n`;
         receiptText += "--------------------------------\n";
         
-        // PERBAIKAN: Cetak Diskon Per Item
         currentOrder.plates.forEach(plate => {
             if(plate.items.length > 0) {
                 receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
@@ -794,10 +817,7 @@ async function finalizePayment(shouldPrint) {
                     let itemEffectiveTotal = item.qty * item.price;
                     let itemDiscount = itemOrigTotal - itemEffectiveTotal;
 
-                    // Tampilkan Harga Asli terlebih dahulu
                     receiptText += formatLine(itemName, itemOrigTotal.toLocaleString('id-ID'), false);
-                    
-                    // Jika ada diskon menu, cetak di bawahnya
                     if (itemDiscount > 0) {
                         receiptText += formatLine("  Diskon Item:", "-" + itemDiscount.toLocaleString('id-ID'), false);
                     }
@@ -980,6 +1000,51 @@ async function confirmAdminVoid() {
 }
 
 // ---------------------------------------------------------
+// AUTO-EXPIRE SHIFT ENGINE (12 HOURS)
+// ---------------------------------------------------------
+async function autoExpireShift() {
+    document.body.style.pointerEvents = "none";
+    document.body.style.opacity = "0.7";
+    
+    let totalCustomers = 0; let totalPlates = 0; let totalCash = 0; let totalQris = 0; let totalOmset = 0; let totalExpenses = 0; let foodSummary = {};
+
+    let tx = db.transaction(["orders"], "readonly");
+    let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
+    const validOrders = items.filter(o => o.shiftId === currentShiftId && (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed"));
+    validOrders.forEach(o => {
+        totalCustomers++;
+        let activePlates = o.plates.filter(p => p.items.length > 0).length; totalPlates += activePlates;
+        totalCash += (o.cashAmount || 0); totalQris += (o.qrisAmount || 0); totalOmset += (o.grandTotal || 0);
+        o.plates.forEach(p => p.items.forEach(i => { if(!foodSummary[i.name]) foodSummary[i.name] = 0; foodSummary[i.name] += i.qty; }));
+    });
+
+    let tx2 = db.transaction(["expenses"], "readonly");
+    let exps = await new Promise(res => tx2.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
+    const validExp = exps.filter(exp => exp.shiftId === currentShiftId && exp.status !== "Voided" && exp.status !== "Void Pending");
+    validExp.forEach(exp => { totalExpenses += (exp.amount || 0); });
+
+    calculateLiveDrawer((liveDrawer) => {
+        window.currentShiftData = {
+            shiftId: currentShiftId, cashier: currentCashier, totalCustomers: totalCustomers, totalPlates: totalPlates, 
+            totalOmset: totalOmset, totalCash: totalCash, totalQris: totalQris, totalExpenses: totalExpenses, 
+            netCash: liveDrawer, foodSummary: foodSummary
+        };
+        executeFinalLogout(liveDrawer); 
+    });
+}
+
+// Pengecekan real-time setiap menit saat tablet dibiarkan menyala
+window.setInterval(() => {
+    if (currentLoginTime && !document.getElementById("pos-screen").classList.contains("hidden")) {
+        const loginTime = new Date(currentLoginTime).getTime();
+        if (Date.now() - loginTime > 12 * 60 * 60 * 1000) {
+            alert("Shift telah melebihi 12 jam. Sistem sedang menutup shift Anda secara otomatis...");
+            autoExpireShift();
+        }
+    }
+}, 60000);
+
+// ---------------------------------------------------------
 // STRICT LOGOUT SEQUENCE & SHIFT REPORTING
 // ---------------------------------------------------------
 function viewPastShift(shiftId) {
@@ -993,16 +1058,6 @@ function viewPastShift(shiftId) {
             };
         } else { populateShiftModal(s, true); }
     };
-}
-
-// TOMBOL CETAK SHIFT
-function printCurrentShift() {
-    printShiftReport(currentShiftId);
-}
-function printPastShiftFromModal() {
-    if(window.currentShiftData && window.currentShiftData.shiftId) {
-        printShiftReport(window.currentShiftData.shiftId);
-    }
 }
 
 function populateShiftModal(s, isPast) {
@@ -1336,6 +1391,12 @@ async function reprintOrder(orderId) {
 
         await printToBluetooth(receiptText);
     };
+}
+
+// CETAK SHIFT
+function printCurrentShift() { printShiftReport(currentShiftId); }
+function printPastShiftFromModal() {
+    if(window.currentShiftData && window.currentShiftData.shiftId) { printShiftReport(window.currentShiftData.shiftId); }
 }
 
 async function printShiftReport(shiftId) {
