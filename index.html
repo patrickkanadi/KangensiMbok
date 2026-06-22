@@ -56,7 +56,6 @@
         .cust-tab { padding: 12px 16px; background: #ecf0f1; border: none; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; color: #7f8c8d; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 6px; }
         .cust-tab.active { background: white; color: #2c3e50; font-weight: bold; border: 2px solid #ddd; border-bottom: 2px solid white; margin-bottom: -2px; }
         
-        /* BILAH INFO MEJA AKTIF */
         #active-table-header { padding: 12px 15px; background: #fff; border-bottom: 2px solid #eee; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         
         #plates-container { flex: 1; padding: 15px; overflow-y: auto; min-height: 0; background: #fcfcfc; }
@@ -105,6 +104,26 @@
         .shift-card { background: #fdfdfd; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #eee; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
         .shift-card h3 { margin: 0 0 5px 0; font-size: 20px; color: #2c3e50; }
         .shift-card p { margin: 0; color: #7f8c8d; font-size: 11px; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; }
+
+        /* KERTAS STRUK THERMAL DIGITAL */
+        #receipt-paper {
+            background: white;
+            padding: 20px 15px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            color: black;
+            box-shadow: 0 8px 15px rgba(0,0,0,0.15);
+            margin: 0 auto 20px auto;
+            width: 100%;
+            max-width: 320px; /* Lebar simulasi 58mm */
+            position: relative;
+        }
+        /* Efek potongan bergerigi di bawah struk */
+        #receipt-paper::after {
+            content: ""; position: absolute; bottom: -10px; left: 0; width: 100%; height: 10px;
+            background: linear-gradient(135deg, transparent 50%, white 50%), linear-gradient(-135deg, transparent 50%, white 50%);
+            background-size: 10px 10px;
+        }
 
         @media print {
             body { background: white; margin: 0; padding: 0; }
@@ -196,6 +215,20 @@
                         <button class="btn-pay" onclick="reviewOrder()">Proses Pembayaran</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="receipt-preview-modal" class="modal-overlay hidden" style="z-index: 2000;">
+        <div class="modal-content" style="max-width: 400px; background: #ebedef; padding: 30px 20px;">
+            <h2 style="margin-top:0; font-size: 18px; text-align: center; color: #7f8c8d; margin-bottom: 20px;">👁️ Pratinjau Struk</h2>
+            
+            <div id="receipt-paper">
+                </div>
+            
+            <div style="display:flex; gap:10px; margin-top: 30px;">
+                <button onclick="closeReceiptPreview()" style="flex:1; padding:15px; background:#bdc3c7; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Tutup</button>
+                <button id="btn-reprint-preview" style="flex:2; padding:15px; background:#27ae60; color:white; border:none; border-radius:10px; font-weight:bold; font-size: 16px; cursor:pointer;">🖨️ Cetak Printer</button>
             </div>
         </div>
     </div>
@@ -343,6 +376,7 @@
                 <div style="display:flex; justify-content:space-between; margin-bottom:8px; color:#e74c3c;" id="review-discount-row" class="hidden">
                     <span>Total Diskon Promo:</span> <strong id="review-discount">-Rp 0</strong>
                 </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:8px; color:#7f8c8d;"><span>Pajak:</span> <span id="review-tax" style="color: #2c3e50; font-weight: 600;">Rp 0</span></div>
                 <div style="display:flex; justify-content:space-between; font-size:22px; color:#2c3e50; margin-top:12px; padding-top:12px; border-top:2px dashed #ddd;">
                     <strong>Total Akhir:</strong> <strong id="review-grandtotal">Rp 0</strong>
                 </div>
@@ -369,8 +403,6 @@
         </div>
     </div>
 
-    <div id="printable-area"></div>
-
-    <script src="app.js?v=34"></script>
+    <script src="app.js?v=35"></script>
 </body>
 </html>
