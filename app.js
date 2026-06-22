@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 35; 
+const DB_VERSION = 36; 
 let db;
 
 let currentCategory = ""; 
@@ -104,7 +104,7 @@ function restoreUnpaidTables() {
 }
 
 // ---------------------------------------------------------
-// LOGIN & SESSION MANAGEMENT (AUTO-SYNC ON FAIL)
+// LOGIN & SESSION MANAGEMENT
 // ---------------------------------------------------------
 async function attemptLogin() {
     const pinInput = String(document.getElementById("cashier-pin").value).trim();
@@ -920,8 +920,6 @@ function renderHistoryList(type) {
                             `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
                             
                 let btnVoid = (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
-                
-                // TOMBOL DETAIL DITAMBAHKAN
                 let btnDetail = `<button onclick="previewOrder('${o.orderId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">👁️ Detail</button>`;
 
                 container.innerHTML += `<div class="history-row"><div><strong>${o.tablePrefix} (${o.customerName})</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnDetail} ${btnVoid}</div></div>`;
@@ -1026,11 +1024,11 @@ async function autoExpireShift() {
 
     calculateLiveDrawer((liveDrawer) => {
         window.currentShiftData = {
-            shiftId: currentShiftId, cashier: currentCashier, totalCustomers: totalCustomers, totalPlates: totalPlates, 
+            shiftId: currentShiftId, cashier: currentCashier + " ⚠️ (Ditutup Sistem)", totalCustomers: totalCustomers, totalPlates: totalPlates, 
             totalOmset: totalOmset, totalCash: totalCash, totalQris: totalQris, totalExpenses: totalExpenses, 
             netCash: liveDrawer, foodSummary: foodSummary
         };
-        executeFinalLogout(liveDrawer); 
+        executeFinalLogout(liveDrawer, true); 
     });
 }
 
@@ -1123,7 +1121,7 @@ function previewOrder(orderId) {
 
         if (order.cashAmount > 0) html += formatLine("Tunai:", "Rp " + order.cashAmount.toLocaleString('id-ID'));
         if (order.qrisAmount > 0) html += formatLine("QRIS:", "Rp " + order.qrisAmount.toLocaleString('id-ID'));
-        html += "</div>"; // Tutup div left align
+        html += "</div>"; 
 
         html += '<div style="text-align:center;">';
         html += '<div>--------------------------------</div>';
@@ -1209,7 +1207,7 @@ async function previewShiftReport(shiftId) {
     } else {
         html += " Tidak ada item terjual\n";
     }
-    html += "</div>"; // Tutup div left align
+    html += "</div>"; 
 
     html += '<div style="text-align:center;">';
     html += '<div>--------------------------------</div>';
@@ -1319,10 +1317,15 @@ function submitCashDrop() {
     });
 }
 
-async function executeFinalLogout(netCash) { 
+async function executeFinalLogout(netCash, isAutoExpire = false) { 
     const data = window.currentShiftData || {};
+    
+    // Terapkan penanda jika ini adalah auto-close
+    let finalCashierName = currentCashier || "Unknown";
+    if (isAutoExpire) finalCashierName += " ⚠️ (Ditutup Sistem)";
+
     const shiftPayload = {
-        shiftId: currentShiftId || ("SHF-" + Date.now()), timestamp: new Date().toISOString(), cashier: currentCashier || "Unknown", 
+        shiftId: currentShiftId || ("SHF-" + Date.now()), timestamp: new Date().toISOString(), cashier: finalCashierName, 
         loginTime: currentLoginTime || new Date().toISOString(), logoutTime: new Date().toISOString(), 
         totalCustomers: data.totalCustomers || 0, totalPlates: data.totalPlates || 0, totalOmset: data.totalOmset || 0, 
         totalCash: data.totalCash || 0, totalQris: data.totalQris || 0, totalExpenses: data.totalExpenses || 0, 
