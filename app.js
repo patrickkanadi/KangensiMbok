@@ -3,7 +3,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2v
 // ^^^ JANGAN LUPA UBAH BARIS INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 30; 
+const DB_VERSION = 33; 
 let db;
 
 let currentCategory = ""; 
@@ -449,13 +449,15 @@ function renderProductGrid() {
 }
 
 // ---------------------------------------------------------
-// CART & CHECKOUT ENGINE
+// CART, CHECKOUT & CUSTOMER INFO ENGINE
 // ---------------------------------------------------------
 function initTabs() { renderCustomerTabs(); renderCartUI(); }
+
 function renderCustomerTabs() {
     const container = document.getElementById("customer-tabs"); container.innerHTML = "";
     activeOrders.forEach((order, index) => {
-        const btn = document.createElement("button"); btn.className = `cust-tab ${index === currentOrderIndex ? "active" : ""}`;
+        const btn = document.createElement("button"); 
+        btn.className = `cust-tab ${index === currentOrderIndex ? "active" : ""}`;
         btn.innerText = order.customerName && order.customerName !== "Walk-in" ? `${order.name} (${order.customerName})` : order.name;
         btn.onclick = () => { currentOrderIndex = index; activePlateIndex = 0; renderCustomerTabs(); renderCartUI(); };
         container.appendChild(btn);
@@ -463,6 +465,7 @@ function renderCustomerTabs() {
     const addBtn = document.createElement("button"); addBtn.className = "cust-tab"; addBtn.innerText = "+ Tambah Meja"; addBtn.onclick = openAddTableModal;
     container.appendChild(addBtn);
 }
+
 function openAddTableModal() {
     document.getElementById("add-table-modal").classList.remove("hidden");
     document.getElementById("cust-phone").value = ""; document.getElementById("cust-name").value = "";
@@ -490,6 +493,61 @@ function confirmAddTable() {
     preserveUnpaidTables(); closeAddTableModal(); renderCustomerTabs(); renderCartUI(); 
     runBackgroundSync();
 }
+
+// ✏️ EDIT INFO PELANGGAN
+function openEditCustomerModal() {
+    if (activeOrders.length === 0) return;
+    const order = activeOrders[currentOrderIndex];
+    document.getElementById("edit-customer-modal").classList.remove("hidden");
+    
+    document.getElementById("edit-cust-phone").value = (order.customerPhone === "Walk-in" || order.customerPhone === "-") ? "" : order.customerPhone;
+    document.getElementById("edit-cust-name").value = (order.customerName === "Walk-in") ? "" : order.customerName;
+    
+    const list = document.getElementById("member-list"); 
+    if(list.innerHTML === "") {
+        db.transaction(["members"], "readonly").objectStore("members").getAll().onsuccess = (e) => {
+            e.target.result.forEach(member => { const opt = document.createElement("option"); opt.value = member.phone; opt.innerText = member.name; list.appendChild(opt); });
+        };
+    }
+}
+
+document.getElementById("edit-cust-phone").addEventListener("input", (e) => {
+    db.transaction(["members"], "readonly").objectStore("members").get(e.target.value).onsuccess = (res) => {
+        if(res.target.result) document.getElementById("edit-cust-name").value = res.target.result.name;
+    };
+});
+
+function closeEditCustomerModal() { document.getElementById("edit-customer-modal").classList.add("hidden"); }
+
+function saveCustomerInfo() {
+    const phone = document.getElementById("edit-cust-phone").value.trim();
+    const name = document.getElementById("edit-cust-name").value.trim() || "Walk-in";
+    
+    if (phone) {
+        const memberData = { phone: phone, name: name };
+        db.transaction(["members"], "readwrite").objectStore("members").put(memberData);
+        db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").put(memberData);
+    }
+    
+    activeOrders[currentOrderIndex].customerName = name;
+    activeOrders[currentOrderIndex].customerPhone = phone || "Walk-in";
+    
+    preserveUnpaidTables(); closeEditCustomerModal(); renderCustomerTabs(); renderCartUI(); runBackgroundSync();
+}
+
+// 🗑️ BATAL MEJA SEPENUHNYA
+function cancelTable() {
+    if (activeOrders.length === 0) return;
+    if (confirm("⚠️ PERINGATAN: Apakah Anda yakin ingin membatalkan pesanan dan menghapus meja ini sepenuhnya?")) { 
+        activeOrders.splice(currentOrderIndex, 1); 
+        currentOrderIndex = 0; 
+        activePlateIndex = 0;
+        preserveUnpaidTables(); 
+        renderCustomerTabs(); 
+        renderCartUI(); 
+    }
+}
+
 function loadSettingsForCart() {
     db.transaction(["settings"], "readonly").objectStore("settings").get("Tax_Rate_Percent").onsuccess = (e) => {
         if (e.target.result && e.target.result.value) taxRatePercent = parseFloat(e.target.result.value);
@@ -518,14 +576,25 @@ function updateQty(plateIndex, itemIndex, delta) {
     if (item.qty <= 0) activeOrders[currentOrderIndex].plates[plateIndex].items.splice(itemIndex, 1);
     preserveUnpaidTables(); renderCartUI();
 }
+
+// PERBAIKAN: Memunculkan Bilah Info Meja Aktif
 function renderCartUI() {
     const container = document.getElementById("plates-container"); container.innerHTML = ""; 
+    const header = document.getElementById("active-table-header");
+
     if (activeOrders.length === 0) {
+        if(header) header.classList.add("hidden");
         container.innerHTML = `<div style="text-align:center; padding:40px; color:#bdc3c7; font-size:16px;">Belum ada meja aktif.</div>`;
         document.getElementById("cart-subtotal").innerText = "Rp 0"; document.getElementById("cart-tax").innerText = "Rp 0"; document.getElementById("cart-total").innerText = "Rp 0";
         return;
     }
-    let subtotal = 0; const currentOrder = activeOrders[currentOrderIndex];
+    
+    if(header) header.classList.remove("hidden");
+    const currentOrder = activeOrders[currentOrderIndex];
+    const nameEl = document.getElementById("active-table-name");
+    if(nameEl) nameEl.innerText = currentOrder.customerName && currentOrder.customerName !== "Walk-in" ? `${currentOrder.name} (${currentOrder.customerName})` : currentOrder.name;
+
+    let subtotal = 0; 
     currentOrder.plates.forEach((plate, index) => {
         const plateBox = document.createElement("div"); plateBox.className = "plate-box";
         if (index === activePlateIndex) { plateBox.style.borderColor = "#3498db"; plateBox.style.borderWidth = "2px"; plateBox.style.background = "#f4fbff"; }
@@ -560,6 +629,7 @@ function renderCartUI() {
     document.getElementById("cart-tax").innerText = `Rp ${taxAmount.toLocaleString('id-ID')}`;
     document.getElementById("cart-total").innerText = `Rp ${grandTotal.toLocaleString('id-ID')}`;
 }
+
 function addNewPlate() {
     activeOrders[currentOrderIndex].plates.push({ plateId: activeOrders[currentOrderIndex].plates.length + 1, items: [] });
     activePlateIndex = activeOrders[currentOrderIndex].plates.length - 1; 
@@ -567,7 +637,7 @@ function addNewPlate() {
 }
 function clearTable() {
     if (activeOrders.length === 0) return;
-    if (confirm("Apakah Anda yakin ingin mengosongkan pesanan meja ini?")) { activeOrders[currentOrderIndex].plates = [{ plateId: 1, items: [] }]; preserveUnpaidTables(); renderCartUI(); }
+    if (confirm("Apakah Anda yakin ingin mengosongkan semua pesanan di piring meja ini?")) { activeOrders[currentOrderIndex].plates = [{ plateId: 1, items: [] }]; preserveUnpaidTables(); renderCartUI(); }
 }
 function reviewOrder() {
     if (activeOrders.length === 0) return;
@@ -714,13 +784,23 @@ async function finalizePayment(shouldPrint) {
         receiptText += `Kasir:     ${currentCashier}\n`;
         receiptText += "--------------------------------\n";
         
+        // PERBAIKAN: Cetak Diskon Per Item
         currentOrder.plates.forEach(plate => {
             if(plate.items.length > 0) {
                 receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
                 plate.items.forEach(item => {
                     let itemName = `${item.qty}x ${item.name}`;
-                    let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
-                    receiptText += formatLine(itemName, itemPrice, false);
+                    let itemOrigTotal = item.qty * item.originalPrice;
+                    let itemEffectiveTotal = item.qty * item.price;
+                    let itemDiscount = itemOrigTotal - itemEffectiveTotal;
+
+                    // Tampilkan Harga Asli terlebih dahulu
+                    receiptText += formatLine(itemName, itemOrigTotal.toLocaleString('id-ID'), false);
+                    
+                    // Jika ada diskon menu, cetak di bawahnya
+                    if (itemDiscount > 0) {
+                        receiptText += formatLine("  Diskon Item:", "-" + itemDiscount.toLocaleString('id-ID'), false);
+                    }
                 });
             }
         });
@@ -804,7 +884,7 @@ function calculateLiveDrawer(callback) {
 }
 
 // ---------------------------------------------------------
-// HISTORY & VOIDS (DENGAN TOMBOL CETAK & CETAK SHIFT)
+// HISTORY & VOIDS 
 // ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
@@ -913,6 +993,16 @@ function viewPastShift(shiftId) {
             };
         } else { populateShiftModal(s, true); }
     };
+}
+
+// TOMBOL CETAK SHIFT
+function printCurrentShift() {
+    printShiftReport(currentShiftId);
+}
+function printPastShiftFromModal() {
+    if(window.currentShiftData && window.currentShiftData.shiftId) {
+        printShiftReport(window.currentShiftData.shiftId);
+    }
 }
 
 function populateShiftModal(s, isPast) {
@@ -1166,7 +1256,7 @@ async function printToBluetooth(receiptText) {
 }
 
 // ============================================================================
-// 🖨️ FITUR CETAK ULANG & LAPORAN SHIFT
+// 🖨️ FITUR CETAK ULANG & LAPORAN SHIFT (REPRINT & SHIFT REPORT)
 // ============================================================================
 async function reprintOrder(orderId) {
     db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = async (e) => {
@@ -1218,8 +1308,14 @@ async function reprintOrder(orderId) {
                 receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
                 plate.items.forEach(item => {
                     let itemName = `${item.qty}x ${item.name}`;
-                    let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
-                    receiptText += formatLine(itemName, itemPrice, false);
+                    let itemOrigTotal = item.qty * item.originalPrice;
+                    let itemEffectiveTotal = item.qty * item.price;
+                    let itemDiscount = itemOrigTotal - itemEffectiveTotal;
+
+                    receiptText += formatLine(itemName, itemOrigTotal.toLocaleString('id-ID'), false);
+                    if (itemDiscount > 0) {
+                        receiptText += formatLine("  Diskon Item:", "-" + itemDiscount.toLocaleString('id-ID'), false);
+                    }
                 });
             }
         });
