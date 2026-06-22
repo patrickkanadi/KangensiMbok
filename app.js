@@ -1,9 +1,9 @@
 // <--- GANTI_DENGAN_URL_WEB_APP_GOOGLE_ANDA_DISINI --->
 const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2vUV431kXl6JsgXu63TkoodlqdEZ3p_o6a20F9rT3zPBYk/exec"; 
-// ^^^ JANGAN LUPA UBAH 2 BARIS INI ^^^
+// ^^^ JANGAN LUPA UBAH BARIS INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 30; // V30: Fitur Cetak Ulang & Laporan Shift
+const DB_VERSION = 30; 
 let db;
 
 let currentCategory = ""; 
@@ -331,13 +331,13 @@ function applyVoidAftermath(order) {
     }
 
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, cashAmount: order.cashAmount || 0, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, cashAmount: order.cashAmount || 0, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
     }
 }
 
 function applyVoidAftermathExpense(exp) {
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "executeVoidAftermathExpense", data: { amount: exp.amount } }) }).catch(e => console.log(e));
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermathExpense", data: { amount: exp.amount } }) }).catch(e => console.log(e));
     }
 }
 
@@ -1038,7 +1038,7 @@ async function executeFinalLogout(netCash) {
 
             try {
                 const response = await fetch(API_URL, { 
-                    method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncShiftReport", data: shiftPayload }), signal: controller.signal
+                    method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }), signal: controller.signal
                 });
                 clearTimeout(timeoutId);
                 const json = await response.json();
@@ -1082,21 +1082,21 @@ async function runBackgroundSync() {
     let tx = db.transaction(["orders"], "readonly"); let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
     for (const order of items) {
         if (order.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) {}
         }
     }
 
     tx = db.transaction(["expenses"], "readonly"); items = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
     for (const exp of items) {
         if (exp.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
         }
     }
 
     tx = db.transaction(["cash_drops"], "readonly"); items = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
     for (const drop of items) {
         if (drop.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
         }
     }
 
@@ -1104,20 +1104,20 @@ async function runBackgroundSync() {
     for (const req of items) {
         try {
             const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
+            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
         } catch(e) {}
     }
 
     tx = db.transaction(["shift_reports"], "readonly"); items = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
     for (const report of items) {
         if (report.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
         }
     }
     
     tx = db.transaction(["unsynced_members"], "readonly"); items = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
     for (const mem of items) {
-        try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+        try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
     }
 }
 
