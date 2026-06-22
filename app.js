@@ -1,9 +1,9 @@
 // <--- GANTI_DENGAN_URL_WEB_APP_GOOGLE_ANDA_DISINI --->
 const API_URL = "https://script.google.com/macros/s/AKfycbzLrATvow-JwSCZBQeHpb2vUV431kXl6JsgXu63TkoodlqdEZ3p_o6a20F9rT3zPBYk/exec"; 
-// ^^^ JANGAN LUPA UBAH BARIS 2 INI ^^^
+// ^^^ JANGAN LUPA UBAH 2 BARIS INI ^^^
 
 const DB_NAME = "Buffet_POS_DB";
-const DB_VERSION = 29; // INI AKAN ME-RESET DATABASE LOKAL OTOMATIS SAAT REFRESH
+const DB_VERSION = 30; // V30: Fitur Cetak Ulang & Laporan Shift
 let db;
 
 let currentCategory = ""; 
@@ -331,13 +331,13 @@ function applyVoidAftermath(order) {
     }
 
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, cashAmount: order.cashAmount || 0, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "executeVoidAftermath", data: { orderId: order.orderId, customerPhone: order.customerPhone, amount: order.grandTotal, cashAmount: order.cashAmount || 0, itemsToReturn: itemsToReturn } }) }).catch(e => console.log(e));
     }
 }
 
 function applyVoidAftermathExpense(exp) {
     if (navigator.onLine) {
-        fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "executeVoidAftermathExpense", data: { amount: exp.amount } }) }).catch(e => console.log(e));
+        fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "executeVoidAftermathExpense", data: { amount: exp.amount } }) }).catch(e => console.log(e));
     }
 }
 
@@ -804,7 +804,7 @@ function calculateLiveDrawer(callback) {
 }
 
 // ---------------------------------------------------------
-// HISTORY & VOIDS (DENGAN HASHING PIN ADMIN)
+// HISTORY & VOIDS (DENGAN TOMBOL CETAK & CETAK SHIFT)
 // ---------------------------------------------------------
 function openHistoryModal() { document.getElementById("history-modal").classList.remove("hidden"); renderHistoryList('orders'); }
 function closeHistoryModal() { document.getElementById("history-modal").classList.add("hidden"); }
@@ -819,8 +819,11 @@ function renderHistoryList(type) {
                 let badge = o.orderStatus === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` :
                             o.orderStatus === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` :
                             `<span class="status-badge status-paid">${o.orderStatus}</span>`; 
-                let btn = (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${o.tablePrefix} (${o.customerName})</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div>`;
+                            
+                let btnVoid = (o.orderStatus === "Paid" || o.orderStatus === "Paid but not printed") ? `<button onclick="requestVoid('orders', '${o.orderId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
+                let btnPrint = (o.orderStatus.startsWith("Paid")) ? `<button onclick="reprintOrder('${o.orderId}')" style="background:#27ae60; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">🖨️ Cetak</button>` : '';
+
+                container.innerHTML += `<div class="history-row"><div><strong>${o.tablePrefix} (${o.customerName})</strong><br><small style="color:#7f8c8d;">${new Date(o.timestamp).toLocaleTimeString()} | Rp ${o.grandTotal.toLocaleString('id-ID')}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnPrint} ${btnVoid}</div></div>`;
             });
         };
     } else if (type === 'expenses') {
@@ -831,8 +834,8 @@ function renderHistoryList(type) {
                 let badge = exp.status === "Voided" ? `<span class="status-badge status-voided">Dibatalkan</span>` :
                             exp.status === "Void Pending" ? `<span class="status-badge status-pending">Menunggu Admin</span>` :
                             `<span class="status-badge status-paid">Aktif</span>`;
-                let btn = exp.status !== "Voided" && exp.status !== "Void Pending" ? `<button onclick="requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
-                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString()} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btn}</div></div></div>`;
+                let btnVoid = exp.status !== "Voided" && exp.status !== "Void Pending" ? `<button onclick="requestVoid('expenses', '${exp.expenseId}')" style="background:#e74c3c; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Void</button>` : '';
+                container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString()} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnVoid}</div></div></div>`;
             });
         };
     } else if (type === 'shifts') {
@@ -840,10 +843,14 @@ function renderHistoryList(type) {
             const shifts = e.target.result.reverse();
             if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada riwayat shift yang tercatat di perangkat ini.</div>`;
             shifts.forEach(s => {
+                let btnPrint = `<button onclick="printShiftReport('${s.shiftId}')" style="background:#27ae60; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">🖨️ Cetak</button>`;
                 container.innerHTML += `
                     <div class="history-row">
                         <div><strong>${s.shiftId} (${s.cashier})</strong><br><small style="color:#7f8c8d;">Logout: ${new Date(s.logoutTime).toLocaleString('id-ID')}</small></div>
-                        <button onclick="viewPastShift('${s.shiftId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Lihat Laporan</button>
+                        <div style="display:flex; gap:10px;">
+                            ${btnPrint}
+                            <button onclick="viewPastShift('${s.shiftId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Lihat Laporan</button>
+                        </div>
                     </div>`;
             });
         };
@@ -1031,7 +1038,7 @@ async function executeFinalLogout(netCash) {
 
             try {
                 const response = await fetch(API_URL, { 
-                    method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: shiftPayload }), signal: controller.signal
+                    method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncShiftReport", data: shiftPayload }), signal: controller.signal
                 });
                 clearTimeout(timeoutId);
                 const json = await response.json();
@@ -1075,21 +1082,21 @@ async function runBackgroundSync() {
     let tx = db.transaction(["orders"], "readonly"); let items = await new Promise(res => tx.objectStore("orders").getAll().onsuccess = e => res(e.target.result));
     for (const order of items) {
         if (order.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncOrder", data: order }) }); if ((await r.json()).status === "Success") { order.syncStatus = "Synced"; db.transaction(["orders"], "readwrite").objectStore("orders").put(order); } } catch(e) {}
         }
     }
 
     tx = db.transaction(["expenses"], "readonly"); items = await new Promise(res => tx.objectStore("expenses").getAll().onsuccess = e => res(e.target.result));
     for (const exp of items) {
         if (exp.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncExpense", data: exp }) }); if ((await r.json()).status === "Success") { exp.syncStatus = "Synced"; db.transaction(["expenses"], "readwrite").objectStore("expenses").put(exp); } } catch(e) {}
         }
     }
 
     tx = db.transaction(["cash_drops"], "readonly"); items = await new Promise(res => tx.objectStore("cash_drops").getAll().onsuccess = e => res(e.target.result));
     for (const drop of items) {
         if (drop.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncCashDrop", data: drop }) }); if ((await r.json()).status === "Success") { drop.syncStatus = "Synced"; db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(drop); } } catch(e) {}
         }
     }
 
@@ -1097,25 +1104,25 @@ async function runBackgroundSync() {
     for (const req of items) {
         try {
             const actionType = req.type === 'orders' ? "requestOrderVoid" : "requestExpenseVoid"; const payload = req.type === 'orders' ? { orderId: req.id, status: req.status, authName: req.authName } : { expenseId: req.id, status: req.status, authName: req.authName };
-            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
+            let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: actionType, ...payload }) }); if ((await r.json()).status === "Success") { db.transaction(["void_requests"], "readwrite").objectStore("void_requests").delete(req.id); }
         } catch(e) {}
     }
 
     tx = db.transaction(["shift_reports"], "readonly"); items = await new Promise(res => tx.objectStore("shift_reports").getAll().onsuccess = e => res(e.target.result));
     for (const report of items) {
         if (report.syncStatus === "Pending") {
-            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
+            try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncShiftReport", data: report }) }); if ((await r.json()).status === "Success") { db.transaction(["shift_reports"], "readwrite").objectStore("shift_reports").delete(report.shiftId); } } catch(e) {}
         }
     }
     
     tx = db.transaction(["unsynced_members"], "readonly"); items = await new Promise(res => tx.objectStore("unsynced_members").getAll().onsuccess = e => res(e.target.result));
     for (const mem of items) {
-        try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
+        try { let r = await fetch(API_URL, { method: "POST", body: JSON.stringify({ secretToken: SECRET_TOKEN, action: "syncMember", data: mem }) }); if ((await r.json()).status === "Success") { db.transaction(["unsynced_members"], "readwrite").objectStore("unsynced_members").delete(mem.phone); } } catch(e) {}
     }
 }
 
 // ============================================================================
-// 🖨️ WEB BLUETOOTH ESC/POS ENGINE (THE HEAVY LIFTING)
+// 🖨️ WEB BLUETOOTH ESC/POS ENGINE
 // ============================================================================
 let printCharacteristic = null;
 
@@ -1156,6 +1163,169 @@ async function printToBluetooth(receiptText) {
     } catch (error) {
         alert("Gagal mencetak ke Bluetooth: " + error.message);
     }
+}
+
+// ============================================================================
+// 🖨️ FITUR CETAK ULANG & LAPORAN SHIFT
+// ============================================================================
+async function reprintOrder(orderId) {
+    db.transaction(["orders"], "readonly").objectStore("orders").get(orderId).onsuccess = async (e) => {
+        const order = e.target.result;
+        if(!order) return alert("Pesanan tidak ditemukan.");
+
+        const settings = await getDynamicSettings();
+        
+        const ESC = '\x1B';
+        const ALIGN_LEFT = ESC + '\x61\x00';
+        const ALIGN_CENTER = ESC + '\x61\x01';
+        const BOLD_ON = ESC + '\x45\x01';
+        const BOLD_OFF = ESC + '\x45\x00';
+        const TEXT_BIG = ESC + '!\x11'; 
+        const TEXT_NORMAL = ESC + '!\x00';
+
+        const formatLine = (leftText, rightText, isBig = false) => {
+            let maxChars = isBig ? 16 : 32;
+            let leftStr = String(leftText);
+            let rightStr = String(rightText);
+            if (leftStr.length + rightStr.length > maxChars) {
+                let rightPad = maxChars - rightStr.length;
+                return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
+            } else {
+                let spacesCount = maxChars - leftStr.length - rightStr.length;
+                return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
+            }
+        };
+
+        let receiptText = "";
+        
+        receiptText += ALIGN_CENTER;
+        receiptText += TEXT_BIG + BOLD_ON + (settings["Store_Name"] || "KSB POS") + "\n" + BOLD_OFF + TEXT_NORMAL;
+        receiptText += (settings["Store_Address"] || "Surabaya") + "\n";
+        receiptText += new Date(order.timestamp).toLocaleString('id-ID') + "\n";
+        receiptText += "--------------------------------\n";
+        receiptText += BOLD_ON + "*** COPY / REPRINT ***\n" + BOLD_OFF;
+        receiptText += "--------------------------------\n";
+        
+        receiptText += ALIGN_LEFT;
+        receiptText += `Pesanan:   ${order.orderId}\n`;
+        receiptText += `Meja:      ${order.tablePrefix}\n`;
+        receiptText += `Pelanggan: ${order.customerName || "Walk-in"}\n`;
+        receiptText += `Kasir:     ${order.cashier}\n`;
+        receiptText += "--------------------------------\n";
+        
+        order.plates.forEach(plate => {
+            if(plate.items.length > 0) {
+                receiptText += BOLD_ON + `Piring ${plate.plateId}\n` + BOLD_OFF;
+                plate.items.forEach(item => {
+                    let itemName = `${item.qty}x ${item.name}`;
+                    let itemPrice = (item.qty * item.originalPrice).toLocaleString('id-ID'); 
+                    receiptText += formatLine(itemName, itemPrice, false);
+                });
+            }
+        });
+        
+        receiptText += "--------------------------------\n";
+        receiptText += formatLine("Subtotal:", "Rp " + order.subtotal.toLocaleString('id-ID'), false);
+        if (order.discounts > 0) receiptText += formatLine("Total Diskon:", "-Rp " + order.discounts.toLocaleString('id-ID'), false);
+        receiptText += "--------------------------------\n";
+        receiptText += TEXT_BIG + BOLD_ON + formatLine("TOTAL:", "Rp " + order.grandTotal.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
+        
+        if (order.cashAmount > 0) receiptText += formatLine("Tunai:", "Rp " + order.cashAmount.toLocaleString('id-ID'), false);
+        if (order.qrisAmount > 0) receiptText += formatLine("QRIS:", "Rp " + order.qrisAmount.toLocaleString('id-ID'), false);
+        
+        receiptText += "--------------------------------\n";
+        receiptText += ALIGN_CENTER;
+        receiptText += TEXT_BIG + BOLD_ON + (settings["Footer_1"] || "TERIMA KASIH!") + "\n" + BOLD_OFF + TEXT_NORMAL;
+        receiptText += "\n\n\n\n"; 
+
+        await printToBluetooth(receiptText);
+    };
+}
+
+async function printShiftReport(shiftId) {
+    let getShift = (id) => new Promise(res => {
+        db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(id).onsuccess = e => {
+            if(e.target.result) res(e.target.result);
+            else db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(id).onsuccess = ev => res(ev.target.result);
+        };
+    });
+
+    const s = await getShift(shiftId);
+    if(!s) return alert("Laporan shift tidak ditemukan.");
+
+    const settings = await getDynamicSettings();
+    
+    const ESC = '\x1B';
+    const ALIGN_LEFT = ESC + '\x61\x00';
+    const ALIGN_CENTER = ESC + '\x61\x01';
+    const BOLD_ON = ESC + '\x45\x01';
+    const BOLD_OFF = ESC + '\x45\x00';
+    const TEXT_BIG = ESC + '!\x11'; 
+    const TEXT_NORMAL = ESC + '!\x00';
+
+    const formatLine = (leftText, rightText, isBig = false) => {
+        let maxChars = isBig ? 16 : 32;
+        let leftStr = String(leftText);
+        let rightStr = String(rightText);
+        if (leftStr.length + rightStr.length > maxChars) {
+            let rightPad = maxChars - rightStr.length;
+            return leftStr + "\n" + " ".repeat(Math.max(0, rightPad)) + rightStr + "\n";
+        } else {
+            let spacesCount = maxChars - leftStr.length - rightStr.length;
+            return leftStr + " ".repeat(spacesCount) + rightStr + "\n";
+        }
+    };
+
+    let receiptText = "";
+    receiptText += ALIGN_CENTER;
+    receiptText += TEXT_BIG + BOLD_ON + (settings["Store_Name"] || "KSB POS") + "\n" + BOLD_OFF + TEXT_NORMAL;
+    receiptText += (settings["Store_Address"] || "Surabaya") + "\n";
+    receiptText += "--------------------------------\n";
+    receiptText += BOLD_ON + "LAPORAN SHIFT\n" + BOLD_OFF;
+    receiptText += "--------------------------------\n";
+    
+    receiptText += ALIGN_LEFT;
+    receiptText += `ID:    ${s.shiftId}\n`;
+    receiptText += `Kasir: ${s.cashier}\n`;
+    receiptText += `Masuk: ${new Date(s.loginTime).toLocaleString('id-ID')}\n`;
+    receiptText += `Keluar:${new Date(s.logoutTime).toLocaleString('id-ID')}\n`;
+    receiptText += "--------------------------------\n";
+    
+    receiptText += formatLine("Pelanggan:", s.totalCustomers, false);
+    receiptText += formatLine("Piring:", s.totalPlates, false);
+    receiptText += "--------------------------------\n";
+    
+    let omset = Number(String(s.totalOmset).replace(/[^\d.-]/g, '')) || 0;
+    let cash = Number(String(s.totalCash).replace(/[^\d.-]/g, '')) || 0;
+    let qris = Number(String(s.totalQris).replace(/[^\d.-]/g, '')) || 0;
+    let exp = Number(String(s.totalExpenses).replace(/[^\d.-]/g, '')) || 0;
+    let net = Number(String(s.netCash).replace(/[^\d.-]/g, '')) || 0;
+
+    receiptText += formatLine("Omset Kotor:", "Rp " + omset.toLocaleString('id-ID'), false);
+    receiptText += formatLine("Kas Tunai:", "Rp " + cash.toLocaleString('id-ID'), false);
+    receiptText += formatLine("QRIS Masuk:", "Rp " + qris.toLocaleString('id-ID'), false);
+    receiptText += formatLine("Pengeluaran:", "-Rp " + exp.toLocaleString('id-ID'), false);
+    receiptText += "--------------------------------\n";
+    receiptText += TEXT_BIG + BOLD_ON + formatLine("UANG LACI:", "Rp " + net.toLocaleString('id-ID'), true) + BOLD_OFF + TEXT_NORMAL;
+    receiptText += "--------------------------------\n";
+    
+    receiptText += BOLD_ON + "ITEM TERJUAL:\n" + BOLD_OFF;
+    let foodStr = typeof s.foodSummary === 'string' ? s.foodSummary : (s.foodSummaryStr || "");
+    if (!foodStr && typeof s.foodSummary === 'object') {
+        for (const [name, qty] of Object.entries(s.foodSummary)) { 
+            receiptText += ` ${qty}x ${name}\n`; 
+        }
+    } else if (foodStr) {
+        let items = foodStr.split('\n');
+        items.forEach(item => { if(item.trim()) receiptText += " " + item.trim().replace('•', '') + "\n"; });
+    } else {
+        receiptText += " Tidak ada item terjual\n";
+    }
+    
+    receiptText += "--------------------------------\n";
+    receiptText += ALIGN_CENTER + "Dicetak: " + new Date().toLocaleString('id-ID') + "\n\n\n\n";
+
+    await printToBluetooth(receiptText);
 }
 
 window.onload = async () => { 
