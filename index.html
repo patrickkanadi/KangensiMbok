@@ -53,8 +53,11 @@
 
         #cart-section { flex: 4; display: flex; flex-direction: column; background: #fff; overflow: hidden; }
         #customer-tabs { display: flex; background: #f8f9fa; padding: 10px 10px 0 10px; overflow-x: auto; gap: 5px; flex-shrink: 0; border-bottom: 2px solid #ddd; }
-        .cust-tab { padding: 12px 16px; background: #ecf0f1; border: none; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; color: #7f8c8d; font-weight: 500; }
+        .cust-tab { padding: 12px 16px; background: #ecf0f1; border: none; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; color: #7f8c8d; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 6px; }
         .cust-tab.active { background: white; color: #2c3e50; font-weight: bold; border: 2px solid #ddd; border-bottom: 2px solid white; margin-bottom: -2px; }
+        
+        /* BILAH INFO MEJA AKTIF */
+        #active-table-header { padding: 12px 15px; background: #fff; border-bottom: 2px solid #eee; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         
         #plates-container { flex: 1; padding: 15px; overflow-y: auto; min-height: 0; background: #fcfcfc; }
         .plate-box { border: 2px solid #ecf0f1; border-radius: 10px; padding: 12px; margin-bottom: 15px; background: white; cursor: pointer; transition: border-color 0.2s; }
@@ -70,7 +73,8 @@
         
         .action-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; }
         .btn-pay { background: #27ae60; color: white; padding: 16px; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(39, 174, 96, 0.2); }
-        .btn-clear { background: #e74c3c; color: white; padding: 16px; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(231, 76, 60, 0.2); }
+        .btn-clear { background: #ecf0f1; color: #7f8c8d; padding: 16px; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        .btn-clear:hover { background: #bdc3c7; color: white; }
 
         /* MODALS */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(44, 62, 80, 0.7); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 15px;}
@@ -102,8 +106,6 @@
         .shift-card h3 { margin: 0 0 5px 0; font-size: 20px; color: #2c3e50; }
         .shift-card p { margin: 0; color: #7f8c8d; font-size: 11px; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; }
 
-        /* 58MM THERMAL RECEIPT CSS (Tetap ada sebagai backup print PDF) */
-        #printable-area { display: none; }
         @media print {
             body { background: white; margin: 0; padding: 0; }
             #login-screen, #pos-screen, .modal-overlay { display: none !important; }
@@ -111,7 +113,6 @@
             @page { margin: 2mm; } 
         }
 
-        /* RESPONSIVE FLUID MOBILE DESIGN */
         @media (max-width: 900px), (orientation: portrait) {
             #main-workspace { flex-direction: column; }
             #menu-section { flex: 0 0 45%; max-height: 45%; border-right: none; border-bottom: 2px solid #ecf0f1; }
@@ -176,13 +177,22 @@
 
             <div id="cart-section">
                 <div id="customer-tabs"></div>
+                
+                <div id="active-table-header" class="hidden">
+                    <div style="font-size: 15px; color: #2c3e50;">
+                        <strong id="active-table-name">Meja ---</strong>
+                        <button onclick="openEditCustomerModal()" style="margin-left: 10px; padding: 6px 12px; font-size: 12px; background: #f39c12; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">✏️ Edit Pelanggan</button>
+                    </div>
+                    <button onclick="cancelTable()" style="padding: 6px 12px; font-size: 12px; background: #c0392b; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">🗑️ Batal Meja</button>
+                </div>
+
                 <div id="plates-container"></div>
                 <div id="checkout-panel">
                     <div class="totals-row"><span>Subtotal:</span> <span id="cart-subtotal" style="font-weight: 600; color: #2c3e50;">Rp 0</span></div>
                     <div class="totals-row"><span>Pajak:</span> <span id="cart-tax" style="font-weight: 600; color: #2c3e50;">Rp 0</span></div>
                     <div class="totals-row grand-total"><span>Total:</span> <span id="cart-total">Rp 0</span></div>
                     <div class="action-buttons">
-                        <button class="btn-clear" onclick="clearTable()">Kosongkan Meja</button>
+                        <button class="btn-clear" onclick="clearTable()">Bersihkan Piring</button>
                         <button class="btn-pay" onclick="reviewOrder()">Proses Pembayaran</button>
                     </div>
                 </div>
@@ -202,6 +212,25 @@
             <div style="display: flex; gap: 10px; margin-top: 25px;">
                 <button onclick="closeAddTableModal()" style="flex:1; padding:15px; background:#ecf0f1; color:#34495e; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Batal</button>
                 <button onclick="confirmAddTable()" style="flex:1; padding:15px; background:#3498db; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Mulai Pesanan</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="edit-customer-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-standard">
+            <h2 style="margin-top:0;">✏️ Edit Info Pelanggan</h2>
+            <p style="color:#7f8c8d; font-size:14px; margin-bottom:15px;">Ubah nomor WhatsApp atau Nama untuk pesanan ini.</p>
+            <div class="form-box">
+                <label>Nomor WhatsApp</label>
+                <input type="text" id="edit-cust-phone" list="member-list" placeholder="0812..." autocomplete="off">
+            </div>
+            <div class="form-box">
+                <label>Nama Pelanggan</label>
+                <input type="text" id="edit-cust-name" placeholder="Kosongkan untuk Walk-in">
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 25px;">
+                <button onclick="closeEditCustomerModal()" style="flex:1; padding:15px; background:#ecf0f1; color:#34495e; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Batal</button>
+                <button onclick="saveCustomerInfo()" style="flex:1; padding:15px; background:#3498db; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Simpan Perubahan</button>
             </div>
         </div>
     </div>
@@ -285,12 +314,14 @@
             <div id="shift-food-list" style="background:#fcfcfc; padding:15px; border-radius:10px; max-height:160px; overflow-y:auto; border:1px solid #eee; font-size:14px; color: #34495e;"></div>
             
             <div style="display: flex; gap: 10px; margin-top: 25px; flex-wrap:wrap;" id="shift-modal-active-buttons">
-                <button onclick="closeShiftReport()" style="flex:1; min-width:100px; padding:16px; background:#ecf0f1; color:#34495e; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Tutup</button>
+                <button onclick="closeShiftReport()" style="flex:1; min-width:80px; padding:16px; background:#ecf0f1; color:#34495e; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Tutup</button>
+                <button onclick="printCurrentShift()" style="flex:1; min-width:80px; padding:16px; background:#27ae60; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">🖨️ Cetak Laporan</button>
                 <button onclick="initiateLogoutSequence()" style="flex:1; min-width:100px; padding:16px; background:#c0392b; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Akhiri Shift & Keluar</button>
             </div>
             
             <div style="display: none; gap: 10px; margin-top: 25px; flex-wrap:wrap;" id="shift-modal-past-buttons">
                 <button onclick="closeShiftReport()" style="flex:1; min-width:100px; padding:16px; background:#ecf0f1; color:#34495e; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Tutup</button>
+                <button onclick="printPastShiftFromModal()" style="flex:1; min-width:100px; padding:16px; background:#27ae60; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">🖨️ Cetak Laporan</button>
             </div>
         </div>
     </div>
@@ -310,9 +341,8 @@
             <div style="background:#fcfcfc; padding:18px; border-radius:12px; border:1px solid #eee; margin-bottom: 20px;">
                 <div style="display:flex; justify-content:space-between; margin-bottom:8px; color: #7f8c8d;"><span>Subtotal:</span> <strong id="review-subtotal" style="color: #2c3e50;">Rp 0</strong></div>
                 <div style="display:flex; justify-content:space-between; margin-bottom:8px; color:#e74c3c;" id="review-discount-row" class="hidden">
-                    <span>Total Diskon:</span> <strong id="review-discount">-Rp 0</strong>
+                    <span>Total Diskon Promo:</span> <strong id="review-discount">-Rp 0</strong>
                 </div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:8px; color:#7f8c8d;"><span>Pajak:</span> <span id="review-tax" style="color: #2c3e50; font-weight: 600;">Rp 0</span></div>
                 <div style="display:flex; justify-content:space-between; font-size:22px; color:#2c3e50; margin-top:12px; padding-top:12px; border-top:2px dashed #ddd;">
                     <strong>Total Akhir:</strong> <strong id="review-grandtotal">Rp 0</strong>
                 </div>
@@ -341,6 +371,6 @@
 
     <div id="printable-area"></div>
 
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=33"></script>
 </body>
 </html>
