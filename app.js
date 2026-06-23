@@ -1201,15 +1201,13 @@ async function runBackgroundSync() {
 }
 
 // ============================================================================
-// 🖨️ WEB BLUETOOTH ESC/POS ENGINE (DENGAN DETEKTOR ERROR)
+// 🖨️ WEB BLUETOOTH ESC/POS ENGINE (CLEAN VERSION)
 // ============================================================================
 let printCharacteristic = null;
 
 async function connectBluetoothPrinter() {
-    alert("Tombol ditekan! Mengecek dukungan sistem...");
-
     if (!navigator.bluetooth) {
-        alert("❌ BROWSER TIDAK MENDUKUNG BLUETOOTH!\nPastikan Anda menggunakan Google Chrome asli, bukan browser dari dalam WhatsApp, Line, atau browser bawaan tablet.");
+        alert("Browser ini tidak mendukung Bluetooth. Harap gunakan Google Chrome.");
         return;
     }
 
@@ -1218,14 +1216,14 @@ async function connectBluetoothPrinter() {
             filters: [{ services: ['000018f0-0000-1000-8000-00805f9b34fb'] }]
         });
         
-        alert("Perangkat ditemukan! Menghubungkan...");
         const server = await device.gatt.connect();
         const service = await server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb');
         printCharacteristic = await service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb');
         
         alert("✅ Printer Bluetooth Berhasil Terhubung!");
     } catch (error) {
-        alert("❌ KONEKSI GAGAL/DIBATALKAN:\nAlasan: " + error.message);
+        // Berjalan sunyi di latar belakang jika kasir membatalkan pencarian
+        console.log("Koneksi dibatalkan atau gagal: " + error.message);
     }
 }
 
@@ -1250,7 +1248,7 @@ async function printToBluetooth(receiptText) {
             await new Promise(resolve => setTimeout(resolve, 10)); 
         }
     } catch (error) {
-        alert("Gagal mencetak ke Bluetooth: " + error.message);
+        alert("Gagal mencetak: Printer mungkin mati atau di luar jangkauan.");
     }
 }
 
