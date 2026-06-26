@@ -1336,14 +1336,22 @@ async function reprintOrder(orderId) {
 }
 
 async function printShiftReport(shiftId) {
-    let getShift = (id) => new Promise(res => {
-        db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(id).onsuccess = e => {
-            if(e.target.result) res(e.target.result);
-            else db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(id).onsuccess = ev => res(ev.target.result);
-        };
-    });
+    let s = null;
 
-    const s = await getShift(shiftId);
+    // PERBAIKAN: Jika ini shift yang sedang aktif, ambil datanya langsung dari layar (memori sementara)
+    if (shiftId === currentShiftId && window.currentShiftData && Object.keys(window.currentShiftData).length > 0) {
+        s = window.currentShiftData;
+    } else {
+        // Jika ini shift lama dari menu Riwayat, baru cari di database
+        let getShift = (id) => new Promise(res => {
+            db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").get(id).onsuccess = e => {
+                if(e.target.result) res(e.target.result);
+                else db.transaction(["past_shifts"], "readonly").objectStore("past_shifts").get(id).onsuccess = ev => res(ev.target.result);
+            };
+        });
+        s = await getShift(shiftId);
+    }
+
     if(!s) return alert("Laporan shift tidak ditemukan.");
 
     const settings = await getDynamicSettings();
@@ -1380,8 +1388,13 @@ async function printShiftReport(shiftId) {
     receiptText += ALIGN_LEFT;
     receiptText += `ID:    ${s.shiftId}\n`;
     receiptText += `Kasir: ${s.cashier}\n`;
-    receiptText += `Masuk: ${new Date(s.loginTime).toLocaleString('id-ID')}\n`;
-    receiptText += `Keluar:${new Date(s.logoutTime).toLocaleString('id-ID')}\n`;
+    
+    // Pastikan loginTime dan logoutTime terbaca dengan benar
+    let loginStr = s.loginTime ? new Date(s.loginTime).toLocaleString('id-ID') : new Date().toLocaleString('id-ID');
+    let logoutStr = s.logoutTime ? new Date(s.logoutTime).toLocaleString('id-ID') : "Belum Berakhir";
+    
+    receiptText += `Masuk: ${loginStr}\n`;
+    receiptText += `Keluar:${logoutStr}\n`;
     receiptText += "--------------------------------\n";
     
     receiptText += formatLine("Pelanggan:", s.totalCustomers, false);
