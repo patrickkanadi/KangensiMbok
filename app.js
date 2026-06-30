@@ -914,15 +914,34 @@ function renderHistoryList(type) {
                 container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString()} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnVoid}</div></div></div>`;
             });
         };
-    } else if (type === 'shifts') {
-        db.transaction(["local_shift_history"], "readonly").objectStore("local_shift_history").getAll().onsuccess = (e) => {
-            const shifts = e.target.result.reverse();
-            if(shifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada riwayat shift yang tercatat di perangkat ini.</div>`;
-            shifts.forEach(s => {
+} else if (type === 'shifts') {
+        const tx = db.transaction(["local_shift_history", "past_shifts"], "readonly");
+        let localShifts = [];
+        let pastShifts = [];
+
+        tx.objectStore("local_shift_history").getAll().onsuccess = (e) => { localShifts = e.target.result || []; };
+        tx.objectStore("past_shifts").getAll().onsuccess = (e) => { pastShifts = e.target.result || []; };
+
+        tx.oncomplete = () => {
+            // Gabungkan shift lokal dan server untuk menghindari duplikasi
+            const map = new Map();
+            pastShifts.forEach(s => map.set(s.shiftId, s));
+            localShifts.forEach(s => map.set(s.shiftId, s));
+
+            // Filter hanya milik kasir yang sedang login, urutkan dari yang terbaru, dan ambil 10 teratas
+            const filteredShifts = Array.from(map.values())
+                .filter(s => s.cashier === currentCashier)
+                .sort((a, b) => new Date(b.logoutTime || b.loginTime || 0) - new Date(a.logoutTime || a.loginTime || 0))
+                .slice(0, 10);
+
+            if(filteredShifts.length === 0) return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada riwayat shift yang tercatat untuk Anda.</div>`;
+            
+            filteredShifts.forEach(s => {
                 let btnPrint = `<button onclick="printShiftReport('${s.shiftId}')" style="background:#27ae60; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">🖨️ Cetak</button>`;
+                let logoutDisplay = s.logoutTime ? new Date(s.logoutTime).toLocaleString('id-ID') : 'Belum Berakhir';
                 container.innerHTML += `
                     <div class="history-row">
-                        <div><strong>${s.shiftId} (${s.cashier})</strong><br><small style="color:#7f8c8d;">Logout: ${new Date(s.logoutTime).toLocaleString('id-ID')}</small></div>
+                        <div><strong>${s.shiftId} (${s.cashier})</strong><br><small style="color:#7f8c8d;">Logout: ${logoutDisplay}</small></div>
                         <div style="display:flex; gap:10px;">
                             ${btnPrint}
                             <button onclick="viewPastShift('${s.shiftId}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Lihat Laporan</button>
