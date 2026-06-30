@@ -329,23 +329,36 @@
         </div>
     </div>
 
-    <div id="shift-report-modal" class="modal-overlay hidden">
-        <div class="modal-content modal-large">
+  <div id="shift-report-modal" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width: 850px; width: 95%;"> 
             <h2 style="margin-top:0; border-bottom:2px solid #eee; padding-bottom:10px;">📊 Laporan Shift</h2>
             <p style="margin-top:-5px; color:#7f8c8d; font-size:14px; font-weight: 500;" id="shift-login-indicator">Waktu Masuk: ---</p>
             
-            <div class="shift-grid">
-                <div class="shift-card"><h3 id="shift-customers">0</h3><p>Pelanggan</p></div>
-                <div class="shift-card"><h3 id="shift-plates">0</h3><p>Piring Digunakan</p></div>
-                <div class="shift-card"><h3 id="shift-omset">Rp 0</h3><p>Omset Kotor</p></div>
-                <div class="shift-card"><h3 id="shift-cash">Rp 0</h3><p>Kas Diterima</p></div>
-                <div class="shift-card"><h3 id="shift-qris">Rp 0</h3><p>QRIS Diterima</p></div>
-                <div class="shift-card"><h3 id="shift-expenses" style="color:#e74c3c;">Rp 0</h3><p>Pengeluaran Dibayar</p></div>
-                <div class="shift-card" style="grid-column: span 3; background:#e8f8f5; border-color:#16a085;"><h3 id="shift-net" style="color:#16a085; font-size: 26px;">Rp 0</h3><p>Uang Fisik di Laci Saat Ini</p></div>
+            <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch;">
+                
+                <div style="flex: 1; min-width: 300px;">
+                    <div class="shift-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 0; gap: 10px;">
+                        <div class="shift-card"><h3 id="shift-customers">0</h3><p>Pelanggan</p></div>
+                        <div class="shift-card"><h3 id="shift-plates">0</h3><p>Piring Digunakan</p></div>
+                        <div class="shift-card"><h3 id="shift-omset">Rp 0</h3><p>Omset Kotor</p></div>
+                        <div class="shift-card"><h3 id="shift-cash">Rp 0</h3><p>Kas Diterima</p></div>
+                        <div class="shift-card"><h3 id="shift-qris">Rp 0</h3><p>QRIS Diterima</p></div>
+                        <div class="shift-card"><h3 id="shift-expenses" style="color:#e74c3c;">Rp 0</h3><p>Pengeluaran</p></div>
+                        <div class="shift-card" style="grid-column: span 2; background:#e8f8f5; border-color:#16a085;">
+                            <h3 id="shift-net" style="color:#16a085; font-size: 26px;">Rp 0</h3>
+                            <p>Uang Fisik di Laci</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column;">
+                    <h3 style="margin-top: 0; margin-bottom:10px; font-size: 16px;">🍔 Makanan Terjual</h3>
+                    <div id="shift-food-list" style="background:#fcfcfc; padding:15px; border-radius:10px; border:1px solid #eee; font-size:14px; color: #34495e; flex: 1; overflow-y:auto; max-height: 290px;">
+                        </div>
+                </div>
+                
             </div>
-            <h3 style="margin-bottom:10px; font-size: 16px;">🍔 Makanan Terjual</h3>
-            <div id="shift-food-list" style="background:#fcfcfc; padding:15px; border-radius:10px; max-height:160px; overflow-y:auto; border:1px solid #eee; font-size:14px; color: #34495e;"></div>
-            
+
             <div style="display: flex; gap: 10px; margin-top: 25px; flex-wrap:wrap;" id="shift-modal-active-buttons">
                 <button onclick="closeShiftReport()" style="flex:1; min-width:80px; padding:16px; background:#ecf0f1; color:#34495e; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">Tutup</button>
                 <button onclick="printCurrentShift()" style="flex:1; min-width:80px; padding:16px; background:#27ae60; color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer;">🖨️ Cetak Laporan</button>
