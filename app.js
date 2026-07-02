@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwskNqcaVKcJ1hhx8Ur3-3AZhPhf1xwtaewqO9vBd8E9Ctv1ev-Mj4x4hJ2y2-3Irmgnw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbykTybIX-9YVGytTKeCBbDdpU9ihP3lbYFaAEBJQA0iE7uaPpI7Te1U568pZdTian_-mw/exec";
 const DB_NAME = "HotelPOS_Local_DB";
 const DB_VERSION = 38; 
 let db;
