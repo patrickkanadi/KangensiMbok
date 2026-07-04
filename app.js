@@ -1109,6 +1109,16 @@ function submitCashDrop() {
 
 async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData || {};
+
+    // 🖨️ CETAK LAPORAN OTOMATIS SEBELUM KELUAR (JIKA PRINTER TERHUBUNG)
+    if (printCharacteristic) {
+        try {
+            await printShiftReport(currentShiftId);
+        } catch (err) {
+            console.log("Gagal mencetak laporan akhir shift: ", err);
+        }
+    }
+
     const shiftPayload = {
         shiftId: currentShiftId || ("SHF-" + Date.now()), timestamp: new Date().toISOString(), cashier: currentCashier || "Unknown", 
         loginTime: currentLoginTime || new Date().toISOString(), logoutTime: new Date().toISOString(), 
@@ -1124,7 +1134,7 @@ async function executeFinalLogout(netCash) {
     try {
         const tx = db.transaction(["local_shift_history", "shift_reports", "active_shifts"], "readwrite");
         tx.objectStore("local_shift_history").put(shiftPayload); 
-        tx.objectStore("shift_reports").put(shiftPayload);       
+        tx.objectStore("shift_reports").put(shiftPayload);        
         if (currentPin) tx.objectStore("active_shifts").delete(currentPin); 
 
         localStorage.removeItem(`unpaid_cache_${currentShiftId}`); 
