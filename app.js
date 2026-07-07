@@ -552,7 +552,21 @@ function loadSettingsForCart() {
     db.transaction(["settings"], "readonly").objectStore("settings").get("Tax_Rate_Percent").onsuccess = (e) => {
         if (e.target.result && e.target.result.value) taxRatePercent = parseFloat(e.target.result.value);
     };
+    
+    // CEK PENGATURAN LACI UANG UNTUK MENYEMBUNYIKAN TOMBOL SETOR KAS
+    db.transaction(["settings"], "readonly").objectStore("settings").get("Laci_Uang_Enabled").onsuccess = (e) => {
+        let laciEnabled = true;
+        if (e.target.result && e.target.result.value !== undefined) {
+            const val = String(e.target.result.value).toUpperCase();
+            if (val === "FALSE" || val === "0") laciEnabled = false;
+        }
+        const setorKasBtn = document.getElementById("btn-setor-kas");
+        if (setorKasBtn) {
+            setorKasBtn.style.display = laciEnabled ? "" : "none";
+        }
+    };
 }
+
 function addItemToCart(item, portionType, basePrice) {
     if (activeOrders.length === 0) return alert("Harap buka meja terlebih dahulu dengan mengklik '+ Tambah Meja'!");
     let effectivePrice = basePrice;
@@ -1081,7 +1095,15 @@ function populateShiftModal(s, isPast) {
     document.getElementById("shift-report-modal").classList.remove("hidden");
 }
 
-function openShiftReport() {
+async function openShiftReport() {
+    // SINKRONISASI SEBELUM MEMBUKA AGAR SALDO LACI & DATA AKURAT
+    if (navigator.onLine) {
+        document.body.style.cursor = "wait";
+        await runBackgroundSync(); 
+        await syncMasterData(true);
+        document.body.style.cursor = "default";
+    }
+
     let totalCustomers = 0; let totalPlates = 0; let totalCash = 0; let totalQris = 0; let totalOmset = 0; let totalExpenses = 0; let foodSummary = {};
 
     db.transaction(["orders"], "readonly").objectStore("orders").getAll().onsuccess = (e) => {
@@ -1110,6 +1132,14 @@ function closeShiftReport() { document.getElementById("shift-report-modal").clas
 function initiateLogoutSequence() { document.getElementById("shift-report-modal").classList.add("hidden"); openCashDrop(true); }
 
 async function openCashDrop(forLogout = false) {
+    // SINKRONISASI SEBELUM MEMBUKA AGAR SALDO LACI AKURAT
+    if (navigator.onLine) {
+        document.body.style.cursor = "wait";
+        await runBackgroundSync(); 
+        await syncMasterData(true);
+        document.body.style.cursor = "default";
+    }
+
     isLoggingOut = forLogout;
     document.getElementById("cash-drop-title").innerText = isLoggingOut ? "🔒 Setoran Akhir Shift" : "🏦 Setor Kas";
     document.getElementById("btn-drop-cancel").innerText = isLoggingOut ? "Batal Keluar" : "Batal";
@@ -1120,7 +1150,7 @@ async function openCashDrop(forLogout = false) {
     // Cek Pengaturan Laci Uang
     const settings = await getDynamicSettings();
     const laciStr = String(settings["Laci_Uang_Enabled"]).toUpperCase();
-    const laciEnabled = laciStr !== "FALSE" && laciStr !== "0"; // Aktif secara default kecuali dimatikan
+    const laciEnabled = laciStr !== "FALSE" && laciStr !== "0";
 
     const inputsDiv = document.getElementById("cash-drop-inputs");
     if (inputsDiv) inputsDiv.style.display = laciEnabled ? "flex" : "none";
