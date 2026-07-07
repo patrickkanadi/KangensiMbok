@@ -916,7 +916,6 @@ function renderHistoryList(type) {
         };
         } else if (type === 'cashflow') {
         db.transaction(["orders", "expenses", "cash_drops"], "readonly").oncomplete = function(e) {
-            // Kita akan mengambil data secara asinkron dari ketiga store
             let flow = [];
             let tx = db.transaction(["orders", "expenses", "cash_drops"], "readonly");
             
@@ -938,7 +937,7 @@ function renderHistoryList(type) {
             };
 
             tx.oncomplete = () => {
-                flow.sort((a, b) => b.time - a.time); // Urutkan dari yang terbaru
+                flow.sort((a, b) => b.time - a.time); 
                 
                 if (flow.length === 0) {
                     return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pergerakan arus kas tunai pada shift ini.</div>`;
@@ -1181,13 +1180,16 @@ async function submitCashDrop() {
 async function executeFinalLogout(netCash) { 
     const data = window.currentShiftData || {};
 
-    // 🖨️ CETAK LAPORAN OTOMATIS SEBELUM KELUAR (JIKA PRINTER TERHUBUNG)
+    // 🖨️ CETAK LAPORAN OTOMATIS SEBELUM KELUAR 
     if (printCharacteristic) {
         try {
             await printShiftReport(currentShiftId);
         } catch (err) {
             console.log("Gagal mencetak laporan akhir shift: ", err);
         }
+    } else {
+        // Notifikasi jika printer tidak tersambung
+        alert("⚠️ Printer Bluetooth tidak terkoneksi!\nLaporan Akhir Shift tidak dapat dicetak secara fisik.");
     }
 
     const shiftPayload = {
