@@ -275,7 +275,7 @@
                 <div style="font-size:12px; color:#7f8c8d; font-weight:bold; text-transform:uppercase; letter-spacing: 0.5px;">Ekspektasi Uang Fisik di Laci Saat Ini</div>
                 <div id="live-drawer-display" style="font-size:32px; font-weight:800; color:#2c3e50; margin-top: 5px;">Rp 0</div>
             </div>
-            <div class="payment-inputs" style="margin-top:0;">
+            <div class="payment-inputs" id="cash-drop-inputs" style="margin-top:0;">
                 <div class="payment-box"><label>Diserahkan ke Admin (Rp)</label><input type="number" id="drop-admin" value="0" onclick="this.select()"></div>
                 <div class="payment-box"><label>Disetor ke Bank (Rp)</label><input type="number" id="drop-bank" value="0" onclick="this.select()"></div>
             </div>
@@ -309,6 +309,9 @@
             <div style="display:flex; gap:10px; margin-bottom:15px; flex-wrap:wrap;">
                 <button onclick="renderHistoryList('orders')" style="flex:1; padding:12px; border-radius:8px; border:1px solid #ddd; background:white; font-weight:bold; cursor:pointer;">🛍️ Pesanan Aktif</button>
                 <button onclick="renderHistoryList('expenses')" style="flex:1; padding:12px; border-radius:8px; border:1px solid #ddd; background:white; font-weight:bold; cursor:pointer;">💸 Pengeluaran Aktif</button>
+                
+                <button onclick="renderHistoryList('cashflow')" style="flex:1; padding:12px; border-radius:8px; border:1px solid #ddd; background:white; font-weight:bold; cursor:pointer;">🌊 Arus Kas</button>
+                
                 <button onclick="renderHistoryList('shifts')" style="flex:1; padding:12px; border-radius:8px; border:none; background:#2c3e50; color:white; font-weight:bold; cursor:pointer;">📊 Shift Berlalu</button>
             </div>
             <div class="history-list" id="history-container" style="max-height:400px; overflow-y:auto; background:#fcfcfc;"></div>
