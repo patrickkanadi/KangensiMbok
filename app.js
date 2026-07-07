@@ -914,6 +914,49 @@ function renderHistoryList(type) {
                 container.innerHTML += `<div class="history-row"><div><strong>${exp.category}</strong><br><small style="color:#7f8c8d;">${new Date(exp.timestamp).toLocaleTimeString()} | Rp ${exp.amount.toLocaleString('id-ID')}</small><br><small>${exp.description}</small></div><div style="display:flex; align-items:center; gap:10px;">${badge} ${btnVoid}</div></div></div>`;
             });
         };
+        } else if (type === 'cashflow') {
+        db.transaction(["orders", "expenses", "cash_drops"], "readonly").oncomplete = function(e) {
+            // Kita akan mengambil data secara asinkron dari ketiga store
+            let flow = [];
+            let tx = db.transaction(["orders", "expenses", "cash_drops"], "readonly");
+            
+            tx.objectStore("orders").getAll().onsuccess = (e) => {
+                e.target.result.filter(o => o.shiftId === currentShiftId && o.orderStatus.startsWith("Paid") && o.cashAmount > 0).forEach(o => {
+                    flow.push({ type: 'in', title: `Pesanan Tunai (${o.tablePrefix})`, amount: o.cashAmount, time: new Date(o.timestamp) });
+                });
+            };
+            tx.objectStore("expenses").getAll().onsuccess = (e) => {
+                e.target.result.filter(exp => exp.shiftId === currentShiftId && exp.status === "Active").forEach(exp => {
+                    flow.push({ type: 'out', title: `Pengeluaran: ${exp.category}`, amount: exp.amount, time: new Date(exp.timestamp) });
+                });
+            };
+            tx.objectStore("cash_drops").getAll().onsuccess = (e) => {
+                e.target.result.filter(d => d.shiftId === currentShiftId).forEach(d => {
+                    let totalDrop = d.toAdmin + d.toBank;
+                    if (totalDrop > 0) flow.push({ type: 'out', title: `Setor Kas (${d.notes})`, amount: totalDrop, time: new Date(d.timestamp) });
+                });
+            };
+
+            tx.oncomplete = () => {
+                flow.sort((a, b) => b.time - a.time); // Urutkan dari yang terbaru
+                
+                if (flow.length === 0) {
+                    return container.innerHTML = `<div style="padding:20px; text-align:center;">Belum ada pergerakan arus kas tunai pada shift ini.</div>`;
+                }
+
+                flow.forEach(f => {
+                    let color = f.type === 'in' ? '#27ae60' : '#e74c3c';
+                    let sign = f.type === 'in' ? '+' : '-';
+                    container.innerHTML += `
+                        <div class="history-row">
+                            <div><strong>${f.title}</strong><br><small style="color:#7f8c8d;">${f.time.toLocaleTimeString('id-ID')}</small></div>
+                            <div style="text-align:right;">
+                                <strong style="color:${color}; font-size:15px;">${sign} Rp ${f.amount.toLocaleString('id-ID')}</strong>
+                            </div>
+                        </div>`;
+                });
+            };
+        };
 } else if (type === 'shifts') {
         const tx = db.transaction(["local_shift_history", "past_shifts"], "readonly");
         let localShifts = [];
@@ -1067,7 +1110,7 @@ function closeShiftReport() { document.getElementById("shift-report-modal").clas
 
 function initiateLogoutSequence() { document.getElementById("shift-report-modal").classList.add("hidden"); openCashDrop(true); }
 
-function openCashDrop(forLogout = false) {
+async function openCashDrop(forLogout = false) {
     isLoggingOut = forLogout;
     document.getElementById("cash-drop-title").innerText = isLoggingOut ? "🔒 Setoran Akhir Shift" : "🏦 Setor Kas";
     document.getElementById("btn-drop-cancel").innerText = isLoggingOut ? "Batal Keluar" : "Batal";
@@ -1075,6 +1118,14 @@ function openCashDrop(forLogout = false) {
     
     document.getElementById("drop-admin").value = 0; document.getElementById("drop-bank").value = 0; document.getElementById("drop-notes").value = "";
     
+    // Cek Pengaturan Laci Uang
+    const settings = await getDynamicSettings();
+    const laciStr = String(settings["Laci_Uang_Enabled"]).toUpperCase();
+    const laciEnabled = laciStr !== "FALSE" && laciStr !== "0"; // Aktif secara default kecuali dimatikan
+
+    const inputsDiv = document.getElementById("cash-drop-inputs");
+    if (inputsDiv) inputsDiv.style.display = laciEnabled ? "flex" : "none";
+
     calculateLiveDrawer((liveAmount) => {
         document.getElementById("live-drawer-display").innerText = `Rp ${liveAmount.toLocaleString('id-ID')}`;
         document.getElementById("cash-drop-modal").classList.remove("hidden");
@@ -1083,16 +1134,31 @@ function openCashDrop(forLogout = false) {
 
 function closeCashDrop() { document.getElementById("cash-drop-modal").classList.add("hidden"); isLoggingOut = false; }
 
-function submitCashDrop() {
+async function submitCashDrop() {
     const adminAmt = Number(document.getElementById("drop-admin").value) || 0;
     const bankAmt = Number(document.getElementById("drop-bank").value) || 0;
     const notes = document.getElementById("drop-notes").value || (isLoggingOut ? "Akhir Shift" : "Setoran Tengah Shift");
     
+    // Cek Pengaturan Laci Uang
+    const settings = await getDynamicSettings();
+    const laciStr = String(settings["Laci_Uang_Enabled"]).toUpperCase();
+    const laciEnabled = laciStr !== "FALSE" && laciStr !== "0";
+
     calculateLiveDrawer((liveAmount) => {
-        const leftInDrawer = liveAmount - adminAmt - bankAmt;
+        let finalAdminAmt = adminAmt;
+        let finalBankAmt = bankAmt;
+        let leftInDrawer = liveAmount - adminAmt - bankAmt;
+
+        // Jika fitur Laci Uang Dimatikan, asumsikan semua uang ditarik oleh Admin
+        if (!laciEnabled) {
+            finalAdminAmt = liveAmount;
+            finalBankAmt = 0;
+            leftInDrawer = 0;
+        }
+
         const payload = {
             dropId: "DRP-" + Date.now(), timestamp: new Date().toISOString(), cashier: currentCashier, shiftId: currentShiftId,
-            toAdmin: adminAmt, toBank: bankAmt, leftInDrawer: leftInDrawer, notes: notes, syncStatus: "Pending"
+            toAdmin: finalAdminAmt, toBank: finalBankAmt, leftInDrawer: leftInDrawer, notes: notes, syncStatus: "Pending"
         };
         
         try { db.transaction(["cash_drops"], "readwrite").objectStore("cash_drops").put(payload); } catch(e) {}
@@ -1102,7 +1168,12 @@ function submitCashDrop() {
         if (isLoggingOut) { 
             executeFinalLogout(leftInDrawer); 
         } else { 
-            runBackgroundSync(); alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+            runBackgroundSync(); 
+            if (laciEnabled) {
+                alert(`Setoran Kas Tercatat!\nSisa di Laci: Rp ${leftInDrawer.toLocaleString('id-ID')}`); 
+            } else {
+                alert(`Setoran Kas Tercatat!\nSemua uang diserahkan ke Admin.`); 
+            }
         }
     });
 }
