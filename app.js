@@ -172,6 +172,7 @@ function checkActiveSession() {
     const savedSession = localStorage.getItem("pos_active_session");
     if (savedSession) { loadSessionData(JSON.parse(savedSession)); }
 }
+
 function loadSessionData(session) {
     currentCashier = session.name; currentPin = session.pin; currentShiftId = session.shiftId; currentLoginTime = session.loginTime;
     document.getElementById("login-screen").classList.add("hidden"); document.getElementById("pos-screen").classList.remove("hidden");
@@ -179,7 +180,9 @@ function loadSessionData(session) {
     document.getElementById("shift-login-indicator").innerText = `Waktu Masuk: ${new Date(currentLoginTime).toLocaleTimeString('id-ID')}`;
     
     restoreUnpaidTables(); loadMenuUI(); initTabs(); 
+    resetInactivityTimer(); // <--- TAMBAHKAN BARIS INI
 }
+
 function lockScreen() { localStorage.removeItem("pos_active_session"); window.location.reload(); }
 
 // ---------------------------------------------------------
@@ -1342,6 +1345,7 @@ async function runBackgroundSync() {
 // ============================================================================
 // 🖨️ WEB BLUETOOTH ESC/POS ENGINE (CLEAN VERSION)
 // ============================================================================
+let bluetoothDevice = null;
 let printCharacteristic = null;
 
 async function connectBluetoothPrinter() {
@@ -1351,20 +1355,42 @@ async function connectBluetoothPrinter() {
     }
 
     try {
-        const device = await navigator.bluetooth.requestDevice({
-            filters: [{ services: ['000018f0-0000-1000-8000-00805f9b34fb'] }]
-        });
+        // 1. Jika belum pernah memilih printer, minta izin kasir
+        if (!bluetoothDevice) {
+            bluetoothDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ services: ['000018f0-0000-1000-8000-00805f9b34fb'] }]
+            });
+            // 2. Pasang sensor jika printer tiba-tiba mati/terputus
+            bluetoothDevice.addEventListener('gattserverdisconnected', onPrinterDisconnected);
+        }
         
-        const server = await device.gatt.connect();
+        // 3. Hubungkan perangkat
+        const server = await bluetoothDevice.gatt.connect();
         const service = await server.getPrimaryService('000018f0-0000-1000-8000-00805f9b34fb');
         printCharacteristic = await service.getCharacteristic('00002af1-0000-1000-8000-00805f9b34fb');
         
         alert("✅ Printer Bluetooth Berhasil Terhubung!");
     } catch (error) {
-        // Berjalan sunyi di latar belakang jika kasir membatalkan pencarian
         console.log("Koneksi dibatalkan atau gagal: " + error.message);
+        bluetoothDevice = null; // Reset memori jika koneksi gagal total
     }
 }
+
+// 4. Sistem Auto-Reconnect saat terputus
+async function onPrinterDisconnected() {
+    console.log("Printer terputus dari POS. Mencoba menyambung kembali secara diam-diam...");
+    printCharacteristic = null; 
+    
+    // Coba paksa konek ulang ke printer yang sama tanpa memunculkan popup
+    if (bluetoothDevice) {
+        try {
+            await connectBluetoothPrinter();
+        } catch(error) {
+            console.log("Auto-reconnect gagal. Kasir perlu menekan tombol Konek Printer lagi secara manual.");
+        }
+    }
+}
+
 
 async function printToBluetooth(receiptText) {
     if (!printCharacteristic) {
@@ -1581,3 +1607,25 @@ window.onload = async () => {
     window.setInterval(runBackgroundSync, 15000); 
     window.setInterval(() => syncMasterData(true), 60000); 
 };
+
+// ============================================================================
+// ⏱️ AUTO LOCK / INACTIVITY TIMER (10 Menit)
+// ============================================================================
+let inactivityTimer;
+const INACTIVITY_LIMIT = 10 * 60 * 1000; // 10 menit (dalam milidetik)
+
+function resetInactivityTimer() {
+    clearTimeout(inactivityTimer);
+    // Hanya jalankan perhitungan mundur jika kasir sedang login (layar POS tampil)
+    if (!document.getElementById("pos-screen").classList.contains("hidden")) {
+        inactivityTimer = setTimeout(() => {
+            // Kunci layar otomatis setelah 10 menit tanpa aktivitas
+            lockScreen();
+        }, INACTIVITY_LIMIT);
+    }
+}
+
+// Pantau setiap sentuhan, klik, pergerakan mouse, atau ketikan dari kasir
+['click', 'mousemove', 'keypress', 'scroll', 'touchstart'].forEach(event => {
+    document.addEventListener(event, resetInactivityTimer, true);
+});
