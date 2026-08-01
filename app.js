@@ -745,6 +745,10 @@ async function getDynamicSettings() {
 }
 
 async function finalizePayment(shouldPrint) {
+    // KUNCI TOMBOL SEMENTARA AGAR TIDAK DI-KLIK GANDA
+    const actionButtons = document.querySelectorAll("#review-modal button");
+    actionButtons.forEach(btn => btn.disabled = true);
+
     const cashPaid = Number(document.getElementById("pay-cash").value);
     const qrisPaid = Number(document.getElementById("pay-qris").value);
     const currentOrder = activeOrders[currentOrderIndex];
@@ -754,7 +758,11 @@ async function finalizePayment(shouldPrint) {
     const changeDue = totalPaid - totals.grandTotal;
 
     if (totalPaid < totals.grandTotal) {
-        if (!confirm("Peringatan: Jumlah yang dibayar kurang dari Total Keseluruhan. Tetap lanjutkan?")) return;
+        if (!confirm("Peringatan: Jumlah yang dibayar kurang dari Total Keseluruhan. Tetap lanjutkan?")) {
+            // Jika batal, nyalakan kembali tombolnya
+            actionButtons.forEach(btn => btn.disabled = false);
+            return;
+        }
     }
     
     const orderId = "ORD-" + Date.now();
@@ -867,7 +875,12 @@ async function finalizePayment(shouldPrint) {
     txMenu.oncomplete = () => { renderProductGrid(); };
 
     db.transaction(["orders"], "readwrite").objectStore("orders").add(orderPayload);
+    
     closeReview(); 
+    
+    // NYALAKAN KEMBALI TOMBOL UNTUK PESANAN SELANJUTNYA
+    actionButtons.forEach(btn => btn.disabled = false);
+
     activeOrders.splice(currentOrderIndex, 1);
     currentOrderIndex = 0; 
     activePlateIndex = 0; 
