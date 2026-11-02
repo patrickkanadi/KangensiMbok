@@ -316,10 +316,16 @@ function applyVoidAftermath(order) {
     const menuStore = tx.objectStore("menu"); const memberStore = tx.objectStore("members");
 
     itemsToReturn.forEach(item => {
+        // Bersihkan akhiran (½) agar cocok dengan nama menu master di database lokal
+        const cleanName = item.name.replace(/\s*\(½\)\s*$/, '').trim();
         menuStore.openCursor().onsuccess = (e) => {
             const cursor = e.target.result;
             if (cursor) {
-                if (cursor.value.name === item.name && cursor.value.trackStock) { const updated = cursor.value; updated.currentStock += item.qty; cursor.update(updated); }
+                if (cursor.value.name === cleanName && cursor.value.trackStock) { 
+                    const updated = cursor.value; 
+                    updated.currentStock += item.qty; 
+                    cursor.update(updated); 
+                }
                 cursor.continue();
             }
         };
